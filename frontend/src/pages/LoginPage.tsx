@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FileText } from 'lucide-react';
+import { FileText, Sparkles } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
+import RAGVisualizer from '../components/RAGVisualizer';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -26,55 +28,91 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-50 to-slate-100 px-4">
-      <div className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center bg-[#05070f] px-4 overflow-hidden">
+      {/* 3D background */}
+      <RAGVisualizer glowColor="blue" density={80} speed={0.4} />
+
+      <div className="absolute top-0 left-0 right-0 bottom-0 bg-[radial-gradient(circle_at_center,rgba(59,130,246,0.08)_0%,transparent_70%)] pointer-events-none" />
+
+      <motion.div 
+        initial={{ opacity: 0, y: 30 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.8, ease: 'easeOut' }}
+        className="relative w-full max-w-md"
+      >
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600">
-            <FileText className="h-7 w-7 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-slate-900">Welcome back</h1>
-          <p className="mt-1 text-sm text-slate-500">Sign in to your Documents RAG account</p>
+          <motion.div 
+            initial={{ scale: 0.8, rotate: -10 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
+            className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-blue-600 via-blue-700 to-teal-500 shadow-lg shadow-blue-500/20"
+          >
+            <FileText className="h-8 w-8 text-white" />
+          </motion.div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center justify-center gap-2">
+            Documents <span className="bg-gradient-to-r from-blue-400 to-teal-400 bg-clip-text text-transparent">RAG</span>
+            <Sparkles className="h-5 w-5 text-cyan-400 animate-pulse-slow" />
+          </h1>
+          <p className="mt-2 text-sm text-slate-400">Secure AI-powered document intelligence</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="card space-y-4">
-          {error && (
-            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
-          )}
+        <div className="rounded-3xl border border-white/10 bg-slate-950/40 p-8 shadow-2xl backdrop-blur-2xl shadow-blue-950/10">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {error && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400"
+              >
+                {error}
+              </motion.div>
+            )}
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="input-field"
-              required
-            />
-          </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300 uppercase tracking-wider">Email Address</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-slate-900/30 px-4 py-3 text-sm text-white placeholder:text-slate-600 outline-none backdrop-blur-md transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                placeholder="name@company.com"
+                required
+              />
+            </div>
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="input-field"
-              required
-            />
-          </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-slate-300 uppercase tracking-wider">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-slate-900/30 px-4 py-3 text-sm text-white placeholder:text-slate-600 outline-none backdrop-blur-md transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                placeholder="••••••••"
+                required
+              />
+            </div>
 
-          <button type="submit" disabled={loading} className="btn-primary w-full">
-            {loading ? 'Signing in...' : 'Sign in'}
-          </button>
+            <motion.button 
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              type="submit" 
+              disabled={loading} 
+              className="w-full inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-blue-700 to-teal-600 py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 hover:from-blue-600 hover:to-teal-500 active:scale-95 transition-all disabled:opacity-50"
+            >
+              {loading ? 'Signing in...' : 'Sign in to workspace'}
+            </motion.button>
 
-          <p className="text-center text-sm text-slate-500">
-            Don't have an account?{' '}
-            <Link to="/register" className="font-medium text-brand-600 hover:text-brand-700">
-              Register
-            </Link>
-          </p>
-        </form>
-      </div>
+            <div className="pt-4 border-t border-white/5 text-center">
+              <p className="text-sm text-slate-400">
+                Don't have an account?{' '}
+                <Link to="/register" className="font-semibold text-blue-400 hover:text-blue-300 hover:underline">
+                  Create an account
+                </Link>
+              </p>
+            </div>
+          </form>
+        </div>
+      </motion.div>
     </div>
   );
 }

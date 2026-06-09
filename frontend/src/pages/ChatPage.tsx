@@ -2,16 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Bot,
-  Calendar,
-  ChevronDown,
-  FileText,
   Filter,
-  MessageSquarePlus,
-  Search,
+  MessageSquare,
   Send,
-  Sparkles,
-  User,
+  Brain,
+  Database,
+  ArrowUpRight,
+  Menu,
+  X,
+  History,
+  Plus,
+  Compass,
+  FileText,
+  Shield,
+  DollarSign,
+  Calendar,
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { api, Category, ChatHistoryItem, ChatResponse } from '../lib/api';
 
 interface Message {
@@ -30,13 +37,23 @@ export default function ChatPage() {
   const [category, setCategory] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  
+  // Sidebar states
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [historyItems, setHistoryItems] = useState<ChatHistoryItem[]>([]);
+  const [activeSourceIndex, setActiveSourceIndex] = useState<{ msgId: string; srcIdx: number } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const threadContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.getCategories().then((res) => setCategories(res.data));
     api.getChatHistory().then((res) => {
+      const rawHistory = res.data;
+      setHistoryItems(rawHistory);
+      
       const historyMessages: Message[] = [];
-      res.data.reverse().forEach((item: ChatHistoryItem) => {
+      [...rawHistory].reverse().forEach((item: ChatHistoryItem) => {
         historyMessages.push({ id: `${item._id}-q`, role: 'user', content: item.question });
         historyMessages.push({
           id: `${item._id}-a`,
@@ -53,12 +70,9 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
+  const submitQuestion = async (question: string) => {
+    if (!question.trim() || loading) return;
 
-    const question = input.trim();
-    setInput('');
     setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'user', content: question }]);
     setLoading(true);
 
@@ -80,6 +94,9 @@ export default function ChatPage() {
           sources: res.data.sources,
         },
       ]);
+      
+      // Refresh history sidebar list
+      api.getChatHistory().then((hRes) => setHistoryItems(hRes.data));
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -94,315 +111,459 @@ export default function ChatPage() {
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const question = input.trim();
+    if (!question) return;
+    setInput('');
+    await submitQuestion(question);
+  };
+
+  const handleSuggestionClick = async (queryText: string) => {
+    setInput('');
+    await submitQuestion(queryText);
+  };
+
   const suggestions = [
-    'Show GST certificate',
-    'Find employee NDA',
-    'What is the contract value?',
-    'Summarize invoices from this month',
+    {
+      title: 'NDA Search',
+      desc: 'Find the standard employee NDA document template',
+      query: 'Find employee NDA template',
+      icon: Shield,
+      color: 'text-emerald-500 bg-emerald-500/10 dark:border-emerald-500/20',
+    },
+    {
+      title: 'GST Details',
+      desc: 'Show registered GST certificate details',
+      query: 'Show GST registration details',
+      icon: FileText,
+      color: 'text-cyan-500 bg-cyan-500/10 dark:border-cyan-500/20',
+    },
+    {
+      title: 'Invoice Value',
+      desc: 'Analyze and retrieve invoice transaction values',
+      query: 'What is the total invoice value?',
+      icon: DollarSign,
+      color: 'text-amber-500 bg-amber-500/10 dark:border-amber-500/20',
+    },
+    {
+      title: 'Monthly Summary',
+      desc: 'Summarize recently ingested database records',
+      query: 'Summarize documents uploaded this month',
+      icon: Calendar,
+      color: 'text-teal-500 bg-teal-500/10 dark:border-teal-500/20',
+    },
   ];
 
+  // Helper to scroll to specific message in thread
+  const scrollToMessage = (msgId: string) => {
+    const element = document.getElementById(msgId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Apply brief highlight effect
+      element.classList.add('bg-blue-500/5', 'dark:bg-blue-500/10');
+      setTimeout(() => {
+        element.classList.remove('bg-blue-500/5', 'dark:bg-blue-500/10');
+      }, 1500);
+    }
+  };
+
+  // Plain-text parser for styled markdown outputs (paragraphs, bold, code blocks, lists)
+  const parseMarkdown = (text: string) => {
+    const blocks = text.split('\n\n');
+    return blocks.map((block, idx) => {
+      // Code blocks
+      if (block.startsWith('```')) {
+        const cleanCode = block.replace(/```[a-zA-Z]*/, '').replace(/```$/, '');
+        return (
+          <pre key={idx} className="my-3 overflow-x-auto rounded-xl border border-slate-200 bg-slate-50 p-4 font-mono text-xs dark:border-white/5 dark:bg-slate-950 text-blue-600 dark:text-teal-400">
+            <code>{cleanCode}</code>
+          </pre>
+        );
+      }
+
+      // Bullet lists
+      if (block.startsWith('- ') || block.startsWith('* ')) {
+        const items = block.split(/\n[-*]\s+/).map((item) => item.replace(/^[-*]\s+/, ''));
+        return (
+          <ul key={idx} className="my-2 list-disc pl-5 space-y-1.5 text-slate-700 dark:text-slate-300">
+            {items.map((item, i) => <li key={i}>{item}</li>)}
+          </ul>
+        );
+      }
+
+      // Numbered lists
+      if (/^\d+\.\s+/.test(block)) {
+        const items = block.split(/\n\d+\.\s+/).map((item) => item.replace(/^\d+\.\s+/, ''));
+        return (
+          <ol key={idx} className="my-2 list-decimal pl-5 space-y-1.5 text-slate-700 dark:text-slate-300">
+            {items.map((item, i) => <li key={i}>{item}</li>)}
+          </ol>
+        );
+      }
+
+      // Standard text with bold processing
+      return (
+        <p key={idx} className="leading-7 mb-3 text-slate-700 dark:text-slate-300">
+          {block.split('**').map((chunk, i) => 
+            i % 2 === 1 ? <strong key={i} className="font-extrabold text-slate-900 dark:text-white">{chunk}</strong> : chunk
+          )}
+        </p>
+      );
+    });
+  };
+
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
-      <aside className="hidden w-72 shrink-0 flex-col border-r border-slate-200 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-950 lg:flex">
-        <button
-          onClick={() => {
-            setMessages([]);
-            setInput('');
-          }}
-          className="mb-4 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
-        >
-          <MessageSquarePlus className="h-4 w-4" />
-          New chat
-        </button>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Filter className="h-4 w-4 text-brand-600" />
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Retrieval filters</h2>
-            </div>
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+    <div className="flex h-screen relative -mx-4 -my-20 lg:-mx-8 lg:-my-8 overflow-hidden bg-slate-50 dark:bg-[#060a13]">
+      
+      {/* LEFT SIDEBAR - Collapsible Chat History */}
+      <AnimatePresence initial={false}>
+        {sidebarOpen && (
+          <>
+            {/* Mobile Chat Sidebar Backdrop */}
+            <div
+              onClick={() => setSidebarOpen(false)}
+              className="fixed inset-0 z-40 bg-slate-900/20 backdrop-blur-sm dark:bg-black/40 lg:hidden"
+            />
+            <motion.aside
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 280, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: 'spring' as const, damping: 25, stiffness: 200 }}
+              className="fixed lg:relative inset-y-0 left-0 z-50 h-full flex flex-col border-r border-slate-200/80 bg-white/95 dark:bg-slate-950/95 lg:bg-white/70 lg:dark:bg-slate-950/20 backdrop-blur-xl shadow-xl lg:shadow-none"
             >
-              <ChevronDown
-                className={`h-4 w-4 transition ${showFilters ? 'rotate-180' : ''}`}
-              />
-            </button>
-          </div>
-
-          {(showFilters || category || dateFrom || dateTo) && (
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
-                  Category
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="input-field"
-                >
-                  <option value="">All categories</option>
-                  {categories.map((cat) => (
-                    <option key={cat._id} value={cat.name}>
-                      {cat.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
-                  Date from
-                </label>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="input-field"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
-                  Date to
-                </label>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="input-field"
-                />
-              </div>
-
+            {/* Sidebar header */}
+            <div className="p-4 flex items-center justify-between border-b border-slate-200/60 dark:border-white/5">
               <button
                 onClick={() => {
-                  setCategory('');
-                  setDateFrom('');
-                  setDateTo('');
+                  setMessages([]);
+                  setInput('');
                 }}
-                className="text-xs font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+                className="flex items-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 px-3.5 py-2 text-xs font-bold text-slate-800 dark:text-white transition-all active:scale-95"
               >
-                Clear filters
+                <Plus className="h-4 w-4 text-blue-600 dark:text-teal-400" />
+                New Chat
+              </button>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-400 dark:text-slate-500"
+              >
+                <X className="h-4 w-4" />
               </button>
             </div>
-          )}
-        </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Agent mode
-          </h2>
-          <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-            The assistant searches your vectors, reads matching chunks, answers with context, and
-            links source documents.
-          </p>
-        </div>
-      </aside>
-
-      <section className="flex min-w-0 flex-1 flex-col bg-white dark:bg-slate-950">
-        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-          <div>
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-brand-600" />
-              <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                Document Agent
-              </h1>
+            {/* Scrollable History List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-4">
+              <div className="space-y-1">
+                <span className="px-3 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                  <History className="h-3.5 w-3.5" />
+                  Recent Queries
+                </span>
+                {historyItems.length === 0 ? (
+                  <p className="px-3 py-4 text-xs text-slate-400 italic">No past queries indexed</p>
+                ) : (
+                  <div className="pt-2 space-y-1">
+                    {historyItems.map((item) => (
+                      <button
+                        key={item._id}
+                        onClick={() => scrollToMessage(`${item._id}-q`)}
+                        className="w-full text-left rounded-xl px-3 py-2.5 text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2 truncate"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                        <span className="truncate">{item.question}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              Ask questions, retrieve sources, and reason over your uploaded documents.
-            </p>
-          </div>
 
+            {/* User widget */}
+            <div className="p-4 border-t border-slate-200/60 dark:border-white/5 flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-bold text-xs uppercase">
+                <Brain className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Cognitive Engine</p>
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 truncate">RAG Integration v1.0</p>
+              </div>
+            </div>
+          </motion.aside>
+        </>
+        )}
+      </AnimatePresence>
+
+      {/* Main Conversation Stream */}
+      <section className="flex-1 flex flex-col relative h-full">
+        {/* Toggle sidebar floating trigger */}
+        {!sidebarOpen && (
           <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="btn-secondary lg:hidden"
+            onClick={() => setSidebarOpen(true)}
+            className="absolute left-4 lg:top-4 top-16 z-10 p-2.5 rounded-xl border border-slate-200 bg-white/80 dark:border-white/5 dark:bg-slate-900/80 backdrop-blur-md shadow-sm text-slate-600 dark:text-slate-300 hover:scale-105 active:scale-95 transition-all"
           >
-            <Filter className="mr-2 h-4 w-4" />
-            Filters
+            <Menu className="h-4 w-4" />
           </button>
-        </header>
-
-        {showFilters && (
-          <div className="border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900 lg:hidden">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="input-field"
-              >
-                <option value="">All categories</option>
-                {categories.map((cat) => (
-                  <option key={cat._id} value={cat.name}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="input-field"
-              />
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="input-field"
-              />
-            </div>
-          </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Conversation flow viewport */}
+        <div 
+          ref={threadContainerRef}
+          className="flex-1 overflow-y-auto px-4 pt-16 pb-36 scroll-smooth"
+        >
           {messages.length === 0 ? (
-            <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-6 text-center">
-              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-brand-600 text-white shadow-lg shadow-brand-600/20">
-                <Bot className="h-8 w-8" />
-              </div>
-              <h2 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-                How can I help with your documents?
-              </h2>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
-                Ask for certificates, values, clauses, dates, employee files, banking records, or
-                summaries. I will search your document library and cite sources.
-              </p>
+            /* Gemini-style startup prompt screen */
+            <div className="max-w-2xl mx-auto min-h-full flex flex-col justify-center items-center text-center space-y-8 px-4 py-8">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-tr from-blue-600 to-teal-500 text-white shadow-lg shadow-blue-500/20"
+              >
+                <Brain className="h-8 w-8 animate-float-slow" />
+              </motion.div>
 
-              <div className="mt-8 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
-                {suggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setInput(s)}
-                    className="group rounded-2xl border border-slate-200 bg-white p-4 text-left text-sm text-slate-700 transition hover:border-brand-300 hover:bg-brand-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-brand-700 dark:hover:bg-brand-950/30"
-                  >
-                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-400 group-hover:text-brand-600 dark:text-slate-500">
-                      <Search className="h-3.5 w-3.5" />
-                      Try asking
-                    </div>
-                    {s}
-                  </button>
-                ))}
+              <div className="space-y-3">
+                <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                  How can I assist you today?
+                </h1>
+                <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
+                  Query the document vault for certificates, NDAs, invoices, or metrics. I will perform semantic alignment and summarize findings.
+                </p>
+              </div>
+
+              {/* Suggestions Header */}
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest pt-6 w-full max-w-2xl text-left">
+                <Compass className="h-4.5 w-4.5 text-blue-500 animate-spin-slow shrink-0" />
+                <span>Try asking:</span>
+              </div>
+
+              {/* Suggestions Grid */}
+              <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
+                {suggestions.map((s, i) => {
+                  const Icon = s.icon;
+                  return (
+                    <motion.button
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.1 }}
+                      whileHover={{ y: -2, transition: { duration: 0.1 } }}
+                      key={s.title}
+                      onClick={() => handleSuggestionClick(s.query)}
+                      className="group relative rounded-2xl border border-slate-200 bg-white/70 p-5 text-left dark:border-white/5 dark:bg-slate-950/40 shadow-sm flex flex-col justify-between hover:border-blue-500/30 hover:shadow-glow-brand hover:bg-blue-500/5 dark:hover:border-blue-500/20 transition-all duration-300 h-28 active:scale-95"
+                    >
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-teal-400 transition-colors">
+                          {s.title}
+                        </h4>
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500 leading-normal pr-6">
+                          {s.desc}
+                        </p>
+                      </div>
+                      
+                      <div className={`absolute bottom-4 right-4 rounded-xl p-2 border shrink-0 transition-transform group-hover:scale-105 ${s.color}`}>
+                        <Icon className="h-4 w-4" />
+                      </div>
+                    </motion.button>
+                  );
+                })}
               </div>
             </div>
           ) : (
-            <div className="mx-auto max-w-4xl px-6 py-8">
-              <div className="space-y-8">
-                {messages.map((msg) => (
-                  <div key={msg.id} className="group flex gap-4">
-                    <div
-                      className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-                        msg.role === 'assistant'
-                          ? 'bg-brand-600 text-white'
-                          : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200'
-                      }`}
-                    >
-                      {msg.role === 'assistant' ? (
-                        <Bot className="h-4 w-4" />
-                      ) : (
-                        <User className="h-4 w-4" />
-                      )}
-                    </div>
+            /* Wide Open Stream - ChatGPT style */
+            <div className="max-w-3xl mx-auto space-y-10 px-2 sm:px-6">
+              {messages.map((msg) => {
+                const isAI = msg.role === 'assistant';
 
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-1 flex items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                          {msg.role === 'assistant' ? 'Document Agent' : 'You'}
-                        </p>
-                        {msg.role === 'assistant' && (
-                          <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700 dark:bg-brand-900/40 dark:text-brand-100">
-                            RAG
+                return (
+                  <div
+                    key={msg.id}
+                    id={msg.id}
+                    className={`group flex items-start gap-4 rounded-2xl p-4 transition-colors ${
+                      isAI 
+                        ? 'justify-start' 
+                        : 'justify-end'
+                    }`}
+                  >
+                    {/* Bot Avatar Left */}
+                    {isAI && (
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400">
+                        <Bot className="h-5 w-5" />
+                      </div>
+                    )}
+
+                    {/* Message Details */}
+                    <div className={`min-w-0 flex-1 space-y-2 ${isAI ? '' : 'flex flex-col items-end'}`}>
+                      {/* Avatar descriptor */}
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest">
+                          {isAI ? 'Assistant' : 'User'}
+                        </span>
+                        {isAI && msg.sources && msg.sources.length > 0 && (
+                          <span className="text-[9px] font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.2 rounded-full uppercase">
+                            RAG Cited
                           </span>
                         )}
                       </div>
 
-                      <div
-                        className={`whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${
-                          msg.role === 'assistant'
-                            ? 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-100'
-                            : 'bg-brand-600 text-white'
-                        }`}
-                      >
-                        {msg.content}
-                      </div>
+                      {/* Content Bubble */}
+                      {isAI ? (
+                        /* Plain text rendering for AI to look clean and un-boxed like ChatGPT */
+                        <div className="text-sm leading-7 pr-4">
+                          {parseMarkdown(msg.content)}
+                        </div>
+                      ) : (
+                        /* Clean right-aligned capsule for User message */
+                        <div className="rounded-2xl rounded-tr-none border border-blue-100/50 bg-blue-50/30 dark:border-blue-500/10 dark:bg-blue-950/10 px-4 py-3 text-sm text-slate-800 dark:text-slate-200 shadow-sm max-w-[90%]">
+                          {msg.content}
+                        </div>
+                      )}
 
-                      {msg.sources && msg.sources.length > 0 && (
-                        <div className="mt-3">
-                          <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
-                            <FileText className="h-3.5 w-3.5" />
-                            Sources used
-                          </p>
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            {msg.sources.map((source, i) => (
-                              <Link
-                                key={`${source.documentId}-${i}`}
-                                to={`/documents/${source.documentId}`}
-                                className="rounded-xl border border-slate-200 bg-white p-3 text-xs transition hover:border-brand-300 hover:bg-brand-50 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-brand-700 dark:hover:bg-brand-950/30"
-                              >
-                                <div className="mb-1 flex items-center justify-between gap-2">
-                                  <span className="truncate font-semibold text-slate-800 dark:text-slate-100">
-                                    {source.documentName}
-                                  </span>
-                                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                                    {(source.score * 100).toFixed(0)}%
-                                  </span>
+                      {/* Source Chips - Gemini style */}
+                      {isAI && msg.sources && msg.sources.length > 0 && (
+                        <div className="pt-4 space-y-2">
+                          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
+                            Citations
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {msg.sources.map((source, sIdx) => {
+                              const isActive = activeSourceIndex?.msgId === msg.id && activeSourceIndex?.srcIdx === sIdx;
+                              
+                              return (
+                                <div key={`${source.documentId}-${sIdx}`} className="relative">
+                                  <button
+                                    onClick={() => setActiveSourceIndex(isActive ? null : { msgId: msg.id, srcIdx: sIdx })}
+                                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border transition-all ${
+                                      isActive
+                                        ? 'bg-blue-600 text-white border-blue-600'
+                                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200/80 dark:bg-slate-950/40 dark:hover:bg-slate-900/60 dark:text-slate-300 dark:border-white/5'
+                                    }`}
+                                  >
+                                    <FileText className="h-3 w-3 shrink-0" />
+                                    <span className="max-w-[120px] truncate">{source.documentName}</span>
+                                    <span className="text-[9px] opacity-70">{(source.score * 100).toFixed(0)}%</span>
+                                  </button>
+
+                                  {/* Expandable citation drawer */}
+                                  <AnimatePresence>
+                                    {isActive && (
+                                      <motion.div
+                                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                        className="absolute left-0 bottom-full mb-2 z-30 w-72 p-4 rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-white/5 dark:bg-slate-950/95 backdrop-blur-xl text-xs space-y-2"
+                                      >
+                                        <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-white/5">
+                                          <span className="font-bold text-slate-900 dark:text-white truncate pr-2">{source.documentName}</span>
+                                          <span className="text-[9px] uppercase tracking-wider text-blue-600 dark:text-blue-400">{source.category}</span>
+                                        </div>
+                                        <p className="text-slate-500 dark:text-slate-400 italic leading-relaxed">
+                                          "{source.content}"
+                                        </p>
+                                        <Link
+                                          to={`/documents/${source.documentId}`}
+                                          className="text-[10px] font-bold text-blue-600 hover:underline uppercase flex items-center gap-1 pt-1"
+                                        >
+                                          Open document
+                                          <ArrowUpRight className="h-3.5 w-3.5" />
+                                        </Link>
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
                                 </div>
-                                <p className="mb-2 text-[11px] font-medium text-brand-600 dark:text-brand-300">
-                                  {source.category}
-                                </p>
-                                <p className="line-clamp-2 text-slate-500 dark:text-slate-400">
-                                  {source.content}
-                                </p>
-                              </Link>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
                     </div>
                   </div>
-                ))}
+                );
+              })}
 
-                {loading && (
-                  <div className="flex gap-4">
-                    <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white">
-                      <Bot className="h-4 w-4" />
+              {/* Thinking loader state */}
+              {loading && (
+                <div className="flex gap-4 p-4 rounded-2xl justify-start">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400">
+                    <Bot className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest">
+                      Assistant
+                    </span>
+                    <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 font-medium py-1">
+                      <Database className="h-3.5 w-3.5 animate-pulse" />
+                      <span>Retrieving vectors & parsing response...</span>
                     </div>
-                    <div>
-                      <p className="mb-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        Document Agent
-                      </p>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 dark:bg-slate-900">
-                        <div className="mb-2 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                          <Calendar className="h-3.5 w-3.5" />
-                          Searching documents and drafting answer
-                        </div>
-                        <div className="flex gap-1">
-                          <span
-                            className="h-2 w-2 animate-bounce rounded-full bg-slate-400"
-                            style={{ animationDelay: '0ms' }}
-                          />
-                          <span
-                            className="h-2 w-2 animate-bounce rounded-full bg-slate-400"
-                            style={{ animationDelay: '150ms' }}
-                          />
-                          <span
-                            className="h-2 w-2 animate-bounce rounded-full bg-slate-400"
-                            style={{ animationDelay: '300ms' }}
-                          />
-                        </div>
-                      </div>
+                    <div className="flex gap-1.5 pt-1">
+                      <span className="h-2 w-2 animate-bounce rounded-full bg-blue-500/60" style={{ animationDelay: '0ms' }} />
+                      <span className="h-2 w-2 animate-bounce rounded-full bg-blue-500/60" style={{ animationDelay: '150ms' }} />
+                      <span className="h-2 w-2 animate-bounce rounded-full bg-blue-500/60" style={{ animationDelay: '300ms' }} />
                     </div>
                   </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
             </div>
           )}
         </div>
 
-        <div className="border-t border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-          <form onSubmit={handleSubmit} className="mx-auto max-w-4xl">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex items-end gap-2">
+        {/* FLOATING PILL INPUT Capsule */}
+        <div className="absolute bottom-0 left-0 right-0 py-6 bg-gradient-to-t from-slate-50 via-slate-50/90 to-transparent dark:from-[#060a13] dark:via-[#060a13]/90 pointer-events-none">
+          <div className="max-w-3xl mx-auto w-full px-4 pointer-events-auto relative">
+            
+            {/* Toggleable Context Filter Popover */}
+            <AnimatePresence>
+              {showFilters && (
+                <motion.div
+                  initial={{ opacity: 0, y: 15, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 15, scale: 0.98 }}
+                  className="absolute bottom-full left-4 right-4 mb-3 p-5 rounded-3xl border border-slate-200 bg-white/90 shadow-2xl dark:border-white/5 dark:bg-slate-950/90 backdrop-blur-xl grid grid-cols-1 sm:grid-cols-3 gap-4"
+                >
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Category Context</label>
+                    <select
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      className="input-field py-2"
+                    >
+                      <option value="">All categories</option>
+                      {categories.map((cat) => (
+                        <option key={cat._id} value={cat.name} className="dark:bg-slate-950">
+                          {cat.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date From</label>
+                    <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="input-field py-2" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date To</label>
+                    <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="input-field py-2" />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <form onSubmit={handleSubmit}>
+              <div className="rounded-3xl border border-slate-200/80 bg-white dark:border-white/5 dark:bg-slate-900/60 shadow-lg backdrop-blur-xl p-2.5 flex items-end gap-2 pr-3.5 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
+                {/* Context filter toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`p-3 rounded-2xl shrink-0 transition-colors ${
+                    showFilters 
+                      ? 'bg-blue-600 text-white shadow-sm' 
+                      : (category || dateFrom || dateTo)
+                        ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20'
+                        : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500'
+                  }`}
+                  title="Context Filters"
+                >
+                  <Filter className="h-4.5 w-4.5" />
+                </button>
+
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -412,33 +573,31 @@ export default function ChatPage() {
                       handleSubmit(e);
                     }
                   }}
-                  placeholder="Message Document Agent..."
+                  placeholder="Ask indexed documents a question..."
                   rows={1}
-                  className="max-h-32 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-slate-100 dark:placeholder:text-slate-500"
+                  className="max-h-32 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-3 text-sm text-slate-950 dark:text-slate-200 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"
                   disabled={loading}
                 />
+
                 <button
                   type="submit"
                   disabled={!input.trim() || loading}
-                  className="mb-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-r from-blue-700 to-teal-600 text-white shadow-md shadow-blue-500/10 hover:from-blue-600 hover:to-teal-500 active:scale-95 transition-transform disabled:opacity-40 disabled:scale-100"
                 >
-                  <Send className="h-4 w-4" />
+                  <Send className="h-4.5 w-4.5" />
                 </button>
               </div>
 
-              {(category || dateFrom || dateTo) && (
-                <div className="flex flex-wrap gap-2 border-t border-slate-200 px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              {/* Status active details indicator */}
+              {(category || dateFrom || dateTo) && !showFilters && (
+                <div className="flex flex-wrap gap-1.5 px-3 mt-2 text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
                   {category && <span>Category: {category}</span>}
                   {dateFrom && <span>From: {dateFrom}</span>}
                   {dateTo && <span>To: {dateTo}</span>}
                 </div>
               )}
-            </div>
-            <p className="mt-2 text-center text-xs text-slate-400 dark:text-slate-500">
-              Answers are generated from retrieved document chunks. Check source documents for
-              critical decisions.
-            </p>
-          </form>
+            </form>
+          </div>
         </div>
       </section>
     </div>
