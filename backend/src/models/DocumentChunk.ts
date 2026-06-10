@@ -7,6 +7,7 @@ export interface IDocumentChunk extends Document {
   content: string;
   tokenCount: number;
   qdrantPointId: string;
+  pageNumber: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -19,6 +20,7 @@ const documentChunkSchema = new Schema<IDocumentChunk>(
     content: { type: String, required: true },
     tokenCount: { type: Number, default: 0 },
     qdrantPointId: { type: String, required: true },
+    pageNumber: { type: Number, default: 1, required: true },
   },
   { timestamps: true }
 );

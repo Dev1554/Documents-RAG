@@ -17,6 +17,8 @@ export interface DocumentFilters {
   tags?: string[];
   dateFrom?: Date;
   dateTo?: Date;
+  uploadedBy?: string;
+  year?: number;
 }
 
 export interface SearchResult {
@@ -28,6 +30,7 @@ export interface SearchResult {
   content: string;
   score: number;
   chunkIndex: number;
+  pageNumber?: number;
 }
 
 export interface ChatSource {
@@ -36,6 +39,7 @@ export interface ChatSource {
   category: string;
   content: string;
   score: number;
+  pageNumber?: number;
 }
 
 export interface StoredFile {
@@ -53,10 +57,13 @@ export interface QdrantPayload {
   documentId: string;
   userId: string;
   documentName: string;
+  documentType?: string;
+  uploadedBy?: string;
   category: string;
   tags: string[];
   chunkIndex: number;
   uploadedAt: string;
+  pageNumber?: number;
   [key: string]: unknown;
 }
 

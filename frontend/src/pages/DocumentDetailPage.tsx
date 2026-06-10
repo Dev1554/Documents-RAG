@@ -11,9 +11,14 @@ import {
   Sparkles,
   ChevronRight,
   Database,
+  Edit,
+  User,
+  Clock,
+  Check,
+  X,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { api, Document } from '../lib/api';
+import { api, Document, Category } from '../lib/api';
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -38,17 +43,58 @@ export default function DocumentDetailPage() {
   const [related, setRelated] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+  const [editDocType, setEditDocType] = useState('');
+  const [editTags, setEditTags] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
   useEffect(() => {
     if (!id) return;
-    api
-      .getDocument(id)
-      .then((res) => {
-        setDocument(res.data.document);
-        setRelated(res.data.related);
+    setLoading(true);
+    Promise.all([
+      api.getDocument(id),
+      api.getCategories()
+    ])
+      .then(([docRes, catRes]) => {
+        setDocument(docRes.data.document);
+        setRelated(docRes.data.related);
+        setCategories(catRes.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [id]);
+
+  const startEditing = () => {
+    if (!document) return;
+    setEditTitle(document.title || document.originalName);
+    setEditCategory(document.category);
+    setEditDocType(document.documentType || 'Other');
+    setEditTags(document.tags.join(', '));
+    setIsEditing(true);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !document) return;
+    setIsSaving(true);
+    try {
+      const res = await api.updateDocumentMetadata(id, {
+        title: editTitle,
+        category: editCategory,
+        documentType: editDocType,
+        tags: editTags,
+      });
+      setDocument(res.data);
+      setIsEditing(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (!id || !confirm('Are you sure you want to delete this document?')) return;
@@ -100,12 +146,17 @@ export default function DocumentDetailPage() {
         className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 p-6 rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 backdrop-blur-xl"
       >
         <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
-            {document.originalName}
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white flex flex-wrap items-center gap-2.5">
+            {document.title || document.originalName}
             <Sparkles className="h-5 w-5 text-blue-500 dark:text-teal-400" />
           </h1>
           <div className="mt-2.5 flex flex-wrap items-center gap-3">
             <StatusBadge status={document.status} />
+            {document.documentType && (
+              <span className="rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                {document.documentType}
+              </span>
+            )}
             <span className="text-xs text-slate-400 font-medium">
               Registered {new Date(document.uploadedAt).toLocaleString()}
             </span>
@@ -169,72 +220,213 @@ export default function DocumentDetailPage() {
         >
           {/* Metadata Grid */}
           <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-5">
-            <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Document Metadata</h2>
+            {isEditing ? (
+              <form onSubmit={handleSave} className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Edit Asset Details</h2>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </button>
+                </div>
 
-            <div className="space-y-4">
-              <div className="flex items-center gap-3.5">
-                <div className="rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                  <FolderOpen className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Category</p>
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.category}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3.5">
-                <div className="rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20">
-                  <Calendar className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date Index</p>
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
-                    {new Date(document.uploadedAt).toLocaleDateString()}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3.5">
-                <div className="rounded-xl bg-cyan-500/10 p-2.5 border border-cyan-500/20 text-cyan-400">
-                  <FileText className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">File Size</p>
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{(document.fileSize / 1024).toFixed(1)} KB</p>
-                </div>
-              </div>
-
-              {document.chunkCount > 0 && (
-                <div className="flex items-center gap-3.5">
-                  <div className="rounded-xl bg-emerald-500/10 p-2.5 border border-emerald-500/20 text-emerald-400">
-                    <Database className="h-4.5 w-4.5" />
-                  </div>
+                <div className="space-y-3">
                   <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vector Chunks</p>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.chunkCount}</p>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Asset Title</label>
+                    <input
+                      type="text"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      className="input-field py-2"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Document Type</label>
+                    <select
+                      value={editDocType}
+                      onChange={(e) => setEditDocType(e.target.value)}
+                      className="input-field py-2"
+                      required
+                    >
+                      <option value="Certificate" className="dark:bg-slate-950">Certificate</option>
+                      <option value="Invoice" className="dark:bg-slate-950">Invoice</option>
+                      <option value="Receipt" className="dark:bg-slate-950">Receipt</option>
+                      <option value="Contract" className="dark:bg-slate-950">Contract</option>
+                      <option value="Agreement" className="dark:bg-slate-950">Agreement</option>
+                      <option value="Report" className="dark:bg-slate-950">Report</option>
+                      <option value="Financial Statement" className="dark:bg-slate-950">Financial Statement</option>
+                      <option value="Other" className="dark:bg-slate-950">Other</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Folder</label>
+                    <select
+                      value={editCategory}
+                      onChange={(e) => setEditCategory(e.target.value)}
+                      className="input-field py-2"
+                      required
+                    >
+                      {categories.map((cat) => (
+                        <option key={cat._id} value={cat.name} className="dark:bg-slate-950">
+                          {cat.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Tags (comma-separated)</label>
+                    <input
+                      type="text"
+                      value={editTags}
+                      onChange={(e) => setEditTags(e.target.value)}
+                      className="input-field py-2"
+                      placeholder="e.g. tax, government"
+                    />
                   </div>
                 </div>
-              )}
-            </div>
 
-            {document.tags.length > 0 && (
-              <div className="pt-4 border-t border-slate-100 dark:border-white/5 space-y-2">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Search Keywords</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {document.tags.map((tag) => (
-                    <span key={tag} className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
-                      <Tag className="h-2.5 w-2.5" />
-                      {tag}
-                    </span>
-                  ))}
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="btn-primary py-2 text-xs flex-1 flex items-center justify-center gap-1.5"
+                  >
+                    {isSaving ? 'Saving...' : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        Save Changes
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="btn-secondary py-2 text-xs flex-1"
+                  >
+                    Cancel
+                  </button>
                 </div>
-              </div>
-            )}
+              </form>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Document Metadata</h2>
+                  <button
+                    onClick={startEditing}
+                    className="flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 dark:text-teal-400 dark:hover:text-teal-300 transition-colors uppercase tracking-wider"
+                  >
+                    <Edit className="h-3.5 w-3.5" />
+                    Edit
+                  </button>
+                </div>
 
-            {document.errorMessage && (
-              <div className="rounded-2xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-500">
-                {document.errorMessage}
-              </div>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 p-2">
+                      <FolderOpen className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Folder</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.category}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 p-2">
+                      <Sparkles className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Document Type</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.documentType || 'Other'}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 p-2">
+                      <User className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Uploaded By</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.uploadedBy || 'Admin'}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 p-2">
+                      <FileText className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">File Details</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                        {document.fileType || 'PDF'} &middot; {(document.fileSize / 1024).toFixed(1)} KB
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-slate-500/10 text-slate-500 dark:text-slate-400 border border-slate-500/20 p-2">
+                      <Calendar className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Created At</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                        {new Date(document.createdAt || document.uploadedAt).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-orange-500/10 text-orange-500 border border-orange-500/20 p-2">
+                      <Clock className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Last Updated</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                        {new Date(document.updatedAt || document.createdAt || document.uploadedAt).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  {document.chunkCount > 0 && (
+                    <div className="flex items-center gap-3.5">
+                      <div className="rounded-xl bg-emerald-500/10 p-2 border border-emerald-500/20 text-emerald-400">
+                        <Database className="h-4.5 w-4.5" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vector Chunks</p>
+                        <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.chunkCount}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {document.tags.length > 0 && (
+                  <div className="pt-4 border-t border-slate-100 dark:border-white/5 space-y-2">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Search Keywords</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {document.tags.map((tag) => (
+                        <span key={tag} className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
+                          <Tag className="h-2.5 w-2.5" />
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {document.errorMessage && (
+                  <div className="rounded-2xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-500">
+                    {document.errorMessage}
+                  </div>
+                )}
+              </>
             )}
           </div>
 

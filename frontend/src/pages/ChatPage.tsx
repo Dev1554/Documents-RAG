@@ -28,6 +28,34 @@ interface Message {
   sources?: ChatResponse['sources'];
 }
 
+interface ParsedMessage {
+  mainContent: string;
+  citations: Array<{ source: string; page: string }>;
+}
+
+const parseMessageContent = (text: string): ParsedMessage => {
+  const citationRegex = /Source:\s*\n*([^\n]+)\s*\n+\s*Page:\s*(\d+)/gi;
+  const citations: Array<{ source: string; page: string }> = [];
+  
+  let match;
+  citationRegex.lastIndex = 0;
+  while ((match = citationRegex.exec(text)) !== null) {
+    citations.push({
+      source: match[1].trim(),
+      page: match[2].trim()
+    });
+  }
+  
+  let mainContent = text.replace(citationRegex, '').trim();
+  const cleanupRegex = /Never trust AI answers without source references\.?/gi;
+  mainContent = mainContent.replace(cleanupRegex, '').trim();
+  
+  return {
+    mainContent,
+    citations
+  };
+};
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -407,8 +435,64 @@ export default function ChatPage() {
                       {/* Content Bubble */}
                       {isAI ? (
                         /* Plain text rendering for AI to look clean and un-boxed like ChatGPT */
-                        <div className="text-sm leading-7 pr-4">
-                          {parseMarkdown(msg.content)}
+                        <div className="text-sm leading-7 pr-4 space-y-4">
+                          <div>
+                            {(() => {
+                              const parsed = parseMessageContent(msg.content);
+                              return (
+                                <>
+                                  {parseMarkdown(parsed.mainContent)}
+                                  
+                                  {/* Premium Verified Citations Panel */}
+                                  {parsed.citations.length > 0 && (
+                                    <div className="mt-4 p-4 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 dark:border-emerald-500/10 dark:bg-emerald-950/10 backdrop-blur-md space-y-3 max-w-xl">
+                                      <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                                        <Shield className="h-4 w-4 shrink-0 text-emerald-500 animate-pulse" />
+                                        <span>Verified Source Documents</span>
+                                      </div>
+                                      <div className="space-y-2">
+                                        {parsed.citations.map((cit, cIdx) => {
+                                          const matchedSource = msg.sources?.find(
+                                            (s) => s.documentName.toLowerCase() === cit.source.toLowerCase()
+                                          );
+                                          return (
+                                            <div
+                                              key={cIdx}
+                                              className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 bg-white/70 dark:border-white/5 dark:bg-slate-900/40 hover:scale-[1.01] hover:bg-white dark:hover:bg-slate-900/80 transition-all duration-200 shadow-sm"
+                                            >
+                                              <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                                  <FileText className="h-4 w-4" />
+                                                </div>
+                                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate pr-2">
+                                                  {cit.source}
+                                                </span>
+                                              </div>
+                                              
+                                              <div className="flex items-center gap-3 shrink-0">
+                                                <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-400 uppercase tracking-wide">
+                                                  Page {cit.page}
+                                                </span>
+                                                {matchedSource && (
+                                                  <Link
+                                                    to={`/documents/${matchedSource.documentId}`}
+                                                    className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-blue-600 dark:text-blue-400"
+                                                    title="Open document"
+                                                  >
+                                                    <ArrowUpRight className="h-4 w-4" />
+                                                  </Link>
+                                                )}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </div>
                         </div>
                       ) : (
                         /* Clean right-aligned capsule for User message */
@@ -439,6 +523,7 @@ export default function ChatPage() {
                                   >
                                     <FileText className="h-3 w-3 shrink-0" />
                                     <span className="max-w-[120px] truncate">{source.documentName}</span>
+                                    <span className="text-[9px] font-medium text-slate-400">p. {source.pageNumber || 1}</span>
                                     <span className="text-[9px] opacity-70">{(source.score * 100).toFixed(0)}%</span>
                                   </button>
 
@@ -453,7 +538,7 @@ export default function ChatPage() {
                                       >
                                         <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-white/5">
                                           <span className="font-bold text-slate-900 dark:text-white truncate pr-2">{source.documentName}</span>
-                                          <span className="text-[9px] uppercase tracking-wider text-blue-600 dark:text-blue-400">{source.category}</span>
+                                          <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400">Page {source.pageNumber || 1}</span>
                                         </div>
                                         <p className="text-slate-500 dark:text-slate-400 italic leading-relaxed">
                                           "{source.content}"

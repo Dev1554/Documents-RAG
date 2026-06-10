@@ -4,9 +4,22 @@ import { Upload, FileUp, Sparkles, FolderOpen, Tag, Check, Loader2, Cpu, Databas
 import { motion, AnimatePresence } from 'framer-motion';
 import { api, Category } from '../lib/api';
 
+const cleanFileNameToTitle = (filename: string) => {
+  const base = filename.substring(0, filename.lastIndexOf('.')) || filename;
+  return base
+    .replace(/[_-]/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+};
+
 export default function UploadPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState('');
+  const [documentType, setDocumentType] = useState('Other');
   const [category, setCategory] = useState('');
   const [tags, setTags] = useState('');
   const [loading, setLoading] = useState(false);
@@ -43,7 +56,10 @@ export default function UploadPage() {
     e.preventDefault();
     setDragOver(false);
     const dropped = e.dataTransfer.files[0];
-    if (dropped) setFile(dropped);
+    if (dropped) {
+      setFile(dropped);
+      setTitle(cleanFileNameToTitle(dropped.name));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -53,7 +69,7 @@ export default function UploadPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await api.uploadDocument(file, category, tags);
+      const res = await api.uploadDocument(file, category, tags, title, documentType);
       // Wait slightly on final step for visualization satisfaction
       setTimeout(() => {
         navigate(`/documents/${res.data._id}`);
@@ -144,7 +160,11 @@ export default function UploadPage() {
                       type="file"
                       className="hidden"
                       accept=".pdf,.docx,.doc,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff"
-                      onChange={(e) => setFile(e.target.files?.[0] || null)}
+                      onChange={(e) => {
+                        const selected = e.target.files?.[0] || null;
+                        setFile(selected);
+                        if (selected) setTitle(cleanFileNameToTitle(selected.name));
+                      }}
                     />
                   </label>
                 </div>
@@ -153,9 +173,55 @@ export default function UploadPage() {
 
             {/* Ingestion Parameters */}
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              {/* Asset Title */}
               <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                  <FolderOpen className="h-4 w-4 text-blue-500" />
+                  <Sparkles className="h-4 w-4 text-blue-500" />
+                  Asset Details
+                </h3>
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Asset Title</label>
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    className="input-field"
+                    placeholder="e.g. GST Certificate"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Document Type */}
+              <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-purple-500" />
+                  Asset Type
+                </h3>
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Document Type</label>
+                  <select
+                    value={documentType}
+                    onChange={(e) => setDocumentType(e.target.value)}
+                    className="input-field"
+                    required
+                  >
+                    <option value="Certificate" className="dark:bg-slate-950">Certificate</option>
+                    <option value="Invoice" className="dark:bg-slate-950">Invoice</option>
+                    <option value="Receipt" className="dark:bg-slate-950">Receipt</option>
+                    <option value="Contract" className="dark:bg-slate-950">Contract</option>
+                    <option value="Agreement" className="dark:bg-slate-950">Agreement</option>
+                    <option value="Report" className="dark:bg-slate-950">Report</option>
+                    <option value="Financial Statement" className="dark:bg-slate-950">Financial Statement</option>
+                    <option value="Other" className="dark:bg-slate-950">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Classification */}
+              <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-emerald-500" />
                   Classification
                 </h3>
                 <div>
@@ -175,6 +241,7 @@ export default function UploadPage() {
                 </div>
               </div>
 
+              {/* Tags */}
               <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
                   <Tag className="h-4 w-4 text-teal-500" />
@@ -195,7 +262,7 @@ export default function UploadPage() {
 
             <button
               type="submit"
-              disabled={!file || !category}
+              disabled={!file || !category || !title.trim()}
               className="btn-primary w-full py-4 text-base font-bold shadow-lg shadow-blue-500/20 active:scale-98 transition-transform disabled:opacity-40"
             >
               Analyze & Index Document

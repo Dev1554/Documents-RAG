@@ -3,9 +3,9 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Upload,
-  FolderOpen,
+  Folder,
+  Database,
   MessageSquare,
-  Tags,
   LogOut,
   FileText,
   Moon,
@@ -21,9 +21,9 @@ import { useTheme } from '../context/ThemeContext';
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/upload', label: 'Upload', icon: Upload },
-  { to: '/library', label: 'Library', icon: FolderOpen },
+  { to: '/library', label: 'Vault', icon: Database },
   { to: '/chat', label: 'AI Chat', icon: MessageSquare },
-  { to: '/categories', label: 'Categories', icon: Tags },
+  { to: '/categories', label: 'Folders', icon: Folder },
 ];
 
 export default function Layout() {

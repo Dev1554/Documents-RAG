@@ -84,11 +84,13 @@ class ApiClient {
     return this.request<ApiResponse<DashboardStats>>('/documents/stats');
   }
 
-  async uploadDocument(file: File, category: string, tags: string) {
+  async uploadDocument(file: File, category: string, tags: string, title?: string, documentType?: string) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('category', category);
     if (tags) formData.append('tags', tags);
+    if (title) formData.append('title', title);
+    if (documentType) formData.append('documentType', documentType);
 
     return this.request<ApiResponse<Document>>('/documents/upload', {
       method: 'POST',
@@ -110,6 +112,16 @@ class ApiClient {
   async deleteDocument(id: string) {
     return this.request<ApiResponse<{ message: string }>>(`/documents/${id}`, {
       method: 'DELETE',
+    });
+  }
+
+  async updateDocumentMetadata(
+    id: string,
+    metadata: { title?: string; category?: string; tags?: string | string[]; documentType?: string }
+  ) {
+    return this.request<ApiResponse<Document>>(`/documents/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(metadata),
     });
   }
 
@@ -147,6 +159,10 @@ export interface Category {
 
 export interface Document {
   _id: string;
+  title: string;
+  documentType: string;
+  uploadedBy: string;
+  fileType: string;
   fileName: string;
   originalName: string;
   fileUrl: string;
@@ -159,6 +175,7 @@ export interface Document {
   errorMessage?: string;
   uploadedAt: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface DashboardStats {
@@ -178,6 +195,7 @@ export interface SearchResult {
   content: string;
   score: number;
   chunkIndex: number;
+  pageNumber?: number;
 }
 
 export interface ChatSource {
@@ -186,6 +204,7 @@ export interface ChatSource {
   category: string;
   content: string;
   score: number;
+  pageNumber?: number;
 }
 
 export interface ChatRequest {

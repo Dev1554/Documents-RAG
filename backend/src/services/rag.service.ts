@@ -6,8 +6,18 @@ import { ChatSource, DocumentFilters } from '../types';
 const SYSTEM_PROMPT = `You are an AI assistant for a private document management system.
 Answer questions based ONLY on the provided document context.
 If the answer is not in the context, say you don't have enough information in the documents.
-Be concise and cite specific document names when relevant.
-For factual questions (dates, numbers, names), quote directly from the context when possible.`;
+Be concise and quote directly from the context when possible.
+
+You MUST include a citation block at the very end of your response for any facts retrieved from the documents.
+For each document used to generate the answer, output the citation in the following exact format:
+
+Source:
+[document_name]
+
+Page: [page_number]
+
+If multiple source files or pages were used, output a citation block for each one, separated by two newlines.
+Never trust AI answers without source references.`;
 
 export async function askQuestion(
   userId: string,
@@ -22,6 +32,7 @@ export async function askQuestion(
     category: r.category,
     content: r.content.slice(0, 500),
     score: r.score,
+    pageNumber: r.pageNumber || 1,
   }));
 
   let answer: string;
@@ -33,7 +44,7 @@ export async function askQuestion(
     const context = sources
       .map(
         (s, i) =>
-          `[Source ${i + 1}: ${s.documentName} (${s.category})]\n${s.content}`
+          `[Source ${i + 1}: ${s.documentName} (Category: ${s.category}, Page: ${s.pageNumber || 1})]\n${s.content}`
       )
       .join('\n\n');
 

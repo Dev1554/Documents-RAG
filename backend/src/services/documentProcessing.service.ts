@@ -25,17 +25,37 @@ export async function processDocument(documentId: string): Promise<void> {
       return;
     }
 
-    const text = await extractText(document.filePath, document.mimeType);
-    document.extractedText = text;
+    const textResult = await extractText(document.filePath, document.mimeType);
+    document.extractedText = textResult.text;
 
-    if (!text) {
+    if (!textResult.text) {
       document.status = 'ready';
       document.chunkCount = 0;
       await document.save();
       return;
     }
 
-    const chunks = chunkText(text);
+    const chunks: Array<{
+      index: number;
+      content: string;
+      tokenCount: number;
+      pageNumber: number;
+    }> = [];
+
+    let chunkIndex = 0;
+    for (const page of textResult.pages) {
+      const pageChunks = chunkText(page.text);
+      for (const c of pageChunks) {
+        chunks.push({
+          index: chunkIndex,
+          content: c.content,
+          tokenCount: c.tokenCount,
+          pageNumber: page.pageNumber,
+        });
+        chunkIndex++;
+      }
+    }
+
     document.chunkCount = chunks.length;
 
     if (chunks.length === 0) {
@@ -59,6 +79,7 @@ export async function processDocument(documentId: string): Promise<void> {
         content: chunk.content,
         tokenCount: chunk.tokenCount,
         qdrantPointId: pointId,
+        pageNumber: chunk.pageNumber,
         embedding: embeddings[i],
       };
     });
@@ -75,11 +96,14 @@ export async function processDocument(documentId: string): Promise<void> {
           chunkId: doc.qdrantPointId,
           documentId: document._id.toString(),
           userId: document.userId.toString(),
-          documentName: document.originalName,
+          documentName: document.title,
+          documentType: document.documentType,
+          uploadedBy: document.uploadedBy,
           category: document.category,
           tags: document.tags,
           chunkIndex: doc.chunkIndex,
           uploadedAt,
+          pageNumber: doc.pageNumber,
         },
       }))
     );
@@ -104,7 +128,15 @@ export async function listDocuments(userId: string, filters: DocumentFilters) {
     query.tags = { $in: filters.tags };
   }
 
-  if (filters.dateFrom || filters.dateTo) {
+  if (filters.uploadedBy) {
+    query.uploadedBy = filters.uploadedBy;
+  }
+
+  if (filters.year) {
+    const start = new Date(`${filters.year}-01-01T00:00:00.000Z`);
+    const end = new Date(`${filters.year}-12-31T23:59:59.999Z`);
+    query.uploadedAt = { $gte: start, $lte: end };
+  } else if (filters.dateFrom || filters.dateTo) {
     query.uploadedAt = {};
     if (filters.dateFrom) {
       (query.uploadedAt as Record<string, Date>).$gte = filters.dateFrom;

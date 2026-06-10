@@ -23,6 +23,12 @@ function parseFilters(query: Record<string, unknown>): DocumentFilters {
   if (typeof query.dateTo === 'string') {
     filters.dateTo = new Date(query.dateTo);
   }
+  if (typeof query.uploadedBy === 'string' && query.uploadedBy.trim()) {
+    filters.uploadedBy = query.uploadedBy.trim();
+  }
+  if (query.year) {
+    filters.year = Number(query.year);
+  }
 
   return filters;
 }
@@ -37,6 +43,8 @@ router.get(
       tags: z.string().optional(),
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
+      uploadedBy: z.string().optional(),
+      year: z.coerce.number().optional(),
       limit: z.coerce.number().min(1).max(50).default(10),
     });
 

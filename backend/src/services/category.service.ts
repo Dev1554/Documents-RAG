@@ -2,9 +2,10 @@ import { Category } from '../models/Category';
 import { AppError } from '../utils/AppError';
 
 const DEFAULT_CATEGORIES = [
-  'Tax',
   'Banking',
+  'Tax',
   'Employees',
+  'Clients',
   'Contracts',
   'Invoices',
   'Compliance',

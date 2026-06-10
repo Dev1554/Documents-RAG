@@ -3,6 +3,10 @@ import { DocumentStatus } from '../types';
 
 export interface IDocument extends Document {
   userId: Types.ObjectId;
+  title: string;
+  documentType: string;
+  uploadedBy: string;
+  fileType: string;
   fileName: string;
   originalName: string;
   fileUrl: string;
@@ -23,6 +27,10 @@ export interface IDocument extends Document {
 const documentSchema = new Schema<IDocument>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    title: { type: String, required: true },
+    documentType: { type: String, required: true, default: 'Other' },
+    uploadedBy: { type: String, required: true },
+    fileType: { type: String, required: true, default: 'PDF' },
     fileName: { type: String, required: true },
     originalName: { type: String, required: true },
     fileUrl: { type: String, required: true },
@@ -44,6 +52,6 @@ const documentSchema = new Schema<IDocument>(
   { timestamps: true }
 );
 
-documentSchema.index({ userId: 1, originalName: 'text', extractedText: 'text', tags: 'text' });
+documentSchema.index({ userId: 1, title: 'text', originalName: 'text', extractedText: 'text', tags: 'text', documentType: 'text' });
 
 export const DocumentModel = mongoose.model<IDocument>('Document', documentSchema);

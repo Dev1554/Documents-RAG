@@ -22,6 +22,7 @@ const chatHistorySchema = new Schema<IChatHistory>(
         category: { type: String, required: true },
         content: { type: String, required: true },
         score: { type: Number, required: true },
+        pageNumber: { type: Number, default: 1 },
       },
     ],
   },

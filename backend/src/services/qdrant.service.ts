@@ -57,6 +57,7 @@ export interface VectorSearchFilter {
   tags?: string[];
   dateFrom?: string;
   dateTo?: string;
+  uploadedBy?: string;
 }
 
 export interface VectorSearchResult {
@@ -82,6 +83,10 @@ export async function searchVectors(
     must.push({ key: 'tags', match: { any: filter.tags } });
   }
 
+  if (filter.uploadedBy) {
+    must.push({ key: 'uploadedBy', match: { value: filter.uploadedBy } });
+  }
+
   if (filter.dateFrom || filter.dateTo) {
     const range: Record<string, string> = {};
     if (filter.dateFrom) range.gte = filter.dateFrom;
@@ -105,4 +110,16 @@ export async function searchVectors(
 
 export function generatePointId(): string {
   return uuidv4();
+}
+
+export async function updateDocumentVectorsPayload(
+  documentId: string,
+  payloadUpdate: Partial<QdrantPayload>
+): Promise<void> {
+  await client.setPayload(env.qdrantCollection, {
+    payload: payloadUpdate,
+    filter: {
+      must: [{ key: 'documentId', match: { value: documentId } }],
+    },
+  });
 }

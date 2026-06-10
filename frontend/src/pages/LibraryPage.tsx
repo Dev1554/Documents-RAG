@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, FileText, Filter, Calendar, Tag, ChevronRight, Sparkles, Folder } from 'lucide-react';
+import { Search, FileText, Filter, Calendar, Tag, ChevronRight, Sparkles, Folder, FolderPlus, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api, Document, Category } from '../lib/api';
 
@@ -22,6 +22,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function LibraryPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [allDocumentsCount, setAllDocumentsCount] = useState<Document[]>([]); // To get actual count of all docs
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
@@ -29,9 +30,16 @@ export default function LibraryPage() {
   const [tags, setTags] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [year, setYear] = useState('');
+  const [uploadedBy, setUploadedBy] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
-  const fetchDocuments = () => {
+  const [movingDocId, setMovingDocId] = useState<string | null>(null);
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+
+  const fetchDocuments = (updateAllCount = false) => {
     setLoading(true);
     const params: Record<string, string> = {};
     if (keyword) params.keyword = keyword;
@@ -39,30 +47,67 @@ export default function LibraryPage() {
     if (tags) params.tags = tags;
     if (dateFrom) params.dateFrom = dateFrom;
     if (dateTo) params.dateTo = dateTo;
+    if (year) params.year = year;
+    if (uploadedBy) params.uploadedBy = uploadedBy;
 
     api
       .getDocuments(params)
       .then((res) => setDocuments(res.data))
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    if (updateAllCount) {
+      api
+        .getDocuments({})
+        .then((res) => setAllDocumentsCount(res.data))
+        .catch(console.error);
+    }
   };
 
   useEffect(() => {
     api.getCategories().then((res) => setCategories(res.data));
-    fetchDocuments();
+    fetchDocuments(true);
   }, []);
+
+  // React to filter changes
+  useEffect(() => {
+    fetchDocuments(true);
+  }, [category, year, uploadedBy]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     fetchDocuments();
   };
 
+  const handleCreateFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFolderName.trim()) return;
+    setCreatingFolder(true);
+    try {
+      await api.createCategory(newFolderName.trim());
+      setNewFolderName('');
+      setShowNewFolderModal(false);
+      const res = await api.getCategories();
+      setCategories(res.data);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create folder');
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
+
+  const getDocCountInFolder = (folderName: string) => {
+    // Check against allDocumentsCount list
+    return allDocumentsCount.filter((d) => d.category === folderName).length;
+  };
+
   // Helper to determine file icon colors
-  const getFileStyle = (mime: string) => {
-    if (mime.includes('pdf')) return { bg: 'bg-red-500/10 text-red-400 border-red-500/20', label: 'PDF' };
-    if (mime.includes('word') || mime.includes('officedocument')) return { bg: 'bg-blue-500/10 text-blue-400 border-blue-500/20', label: 'DOCX' };
-    if (mime.includes('image')) return { bg: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20', label: 'IMG' };
-    return { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20', label: 'TXT' };
+  const getFileStyle = (fileType: string, mime: string) => {
+    const type = (fileType || '').toUpperCase();
+    if (type === 'PDF' || mime.includes('pdf')) return { bg: 'bg-red-500/10 text-red-400 border-red-500/20', label: 'PDF' };
+    if (type === 'DOC' || type === 'DOCX' || mime.includes('word') || mime.includes('officedocument')) return { bg: 'bg-blue-500/10 text-blue-400 border-blue-500/20', label: 'DOCX' };
+    if (type === 'PNG' || type === 'JPG' || type === 'JPEG' || type === 'GIF' || mime.includes('image')) return { bg: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20', label: type || 'IMG' };
+    return { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20', label: type || 'TXT' };
   };
 
   return (
@@ -75,9 +120,86 @@ export default function LibraryPage() {
           </h1>
           <p className="text-slate-500 dark:text-slate-400 mt-1">Search, filter, and inspect your processed knowledge inventory</p>
         </div>
-        <Link to="/upload" className="btn-primary">
-          Ingest new document
-        </Link>
+        <div className="flex items-center gap-3 self-start sm:self-auto">
+          <button
+            onClick={() => setShowNewFolderModal(true)}
+            className="btn-secondary flex items-center justify-center gap-2"
+          >
+            <FolderPlus className="h-4.5 w-4.5" />
+            New Folder
+          </button>
+          <Link to="/upload" className="btn-primary">
+            Ingest new document
+          </Link>
+        </div>
+      </div>
+
+      {/* Folder Browser Grid */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Workspace Folders</h2>
+        </div>
+        
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div
+            onClick={() => setCategory('')}
+            className={`cursor-pointer rounded-2xl border p-4 backdrop-blur-xl transition-all duration-300 flex items-center gap-3 ${
+              category === ''
+                ? 'border-blue-500 bg-blue-50/20 dark:bg-blue-950/10 shadow-glow-brand scale-[1.01]'
+                : 'border-slate-200 bg-white/70 hover:border-slate-300 dark:border-white/5 dark:bg-slate-950/30 hover:scale-[1.01]'
+            }`}
+          >
+            <div className={`rounded-xl p-2.5 ${category === '' ? 'bg-blue-500/10 text-blue-500' : 'bg-slate-100 dark:bg-slate-900 text-slate-400'}`}>
+              <Folder className="h-5 w-5 shrink-0" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-800 dark:text-white truncate">All Documents</p>
+              <p className="text-[10px] text-slate-400 font-semibold">{allDocumentsCount.length} items</p>
+            </div>
+          </div>
+
+          {categories.map((cat) => {
+            const count = getDocCountInFolder(cat.name);
+            const isSelected = category === cat.name;
+            return (
+              <div
+                key={cat._id}
+                onClick={() => setCategory(cat.name)}
+                className={`cursor-pointer rounded-2xl border p-4 backdrop-blur-xl transition-all duration-300 flex items-center gap-3 ${
+                  isSelected
+                    ? 'border-blue-500 bg-blue-50/20 dark:bg-blue-950/10 shadow-glow-brand scale-[1.01]'
+                    : 'border-slate-200 bg-white/70 hover:border-slate-300 dark:border-white/5 dark:bg-slate-950/30 hover:scale-[1.01]'
+                }`}
+              >
+                <div className={`rounded-xl p-2.5 ${isSelected ? 'bg-blue-500/10 text-blue-500' : 'bg-slate-100 dark:bg-slate-900 text-slate-400'}`}>
+                  <Folder className="h-5 w-5 shrink-0" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-slate-800 dark:text-white truncate">{cat.name}</p>
+                  <p className="text-[10px] text-slate-400 font-semibold">{count} items</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Path Breadcrumb */}
+      <div className="flex items-center gap-1.5 text-xs text-slate-400 uppercase tracking-wider font-bold">
+        <span className="text-slate-500">Vault</span>
+        <span>/</span>
+        <button
+          onClick={() => setCategory('')}
+          className={`hover:text-blue-500 transition-colors ${!category ? 'text-blue-600 dark:text-teal-400' : ''}`}
+        >
+          Root
+        </button>
+        {category && (
+          <>
+            <span>/</span>
+            <span className="text-blue-600 dark:text-teal-400 truncate max-w-[150px]">{category}</span>
+          </>
+        )}
       </div>
 
       {/* Unified Search Console */}
@@ -112,16 +234,30 @@ export default function LibraryPage() {
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4 pt-4 border-t border-slate-100 dark:border-white/5 overflow-hidden"
+              className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 pt-4 border-t border-slate-100 dark:border-white/5 overflow-hidden"
             >
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Category</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Folder</label>
                 <select value={category} onChange={(e) => setCategory(e.target.value)} className="input-field py-2">
-                  <option value="">All Categories</option>
+                  <option value="">All Folders</option>
                   {categories.map((cat) => (
                     <option key={cat._id} value={cat.name} className="dark:bg-slate-950">{cat.name}</option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Year</label>
+                <select value={year} onChange={(e) => setYear(e.target.value)} className="input-field py-2">
+                  <option value="">All Years</option>
+                  <option value="2026" className="dark:bg-slate-950">2026</option>
+                  <option value="2025" className="dark:bg-slate-950">2025</option>
+                  <option value="2024" className="dark:bg-slate-950">2024</option>
+                  <option value="2023" className="dark:bg-slate-950">2023</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Uploaded By</label>
+                <input type="text" value={uploadedBy} onChange={(e) => setUploadedBy(e.target.value)} className="input-field py-2" placeholder="e.g. Dev, Admin" />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-slate-400 uppercase tracking-wider">Tags</label>
@@ -152,7 +288,7 @@ export default function LibraryPage() {
         <div className="text-center py-16 rounded-3xl border border-dashed border-slate-200 dark:border-white/5 bg-white/40 dark:bg-slate-950/20">
           <FileText className="mx-auto mb-4 h-12 w-12 text-slate-300 dark:text-slate-700" />
           <p className="text-sm font-semibold text-slate-600 dark:text-slate-400">No documents found matching criteria</p>
-          <button onClick={() => { setKeyword(''); setCategory(''); setTags(''); setDateFrom(''); setDateTo(''); }} className="mt-4 text-xs font-bold text-blue-600 dark:text-teal-400 uppercase tracking-wider">
+          <button onClick={() => { setKeyword(''); setCategory(''); setTags(''); setDateFrom(''); setDateTo(''); setYear(''); setUploadedBy(''); }} className="mt-4 text-xs font-bold text-blue-600 dark:text-teal-400 uppercase tracking-wider">
             Clear filter query
           </button>
         </div>
@@ -162,7 +298,7 @@ export default function LibraryPage() {
           className="grid grid-cols-1 md:grid-cols-2 gap-6"
         >
           {documents.map((doc) => {
-            const fStyle = getFileStyle(doc.mimeType);
+            const fStyle = getFileStyle(doc.fileType, doc.mimeType);
 
             return (
               <motion.div
@@ -184,24 +320,85 @@ export default function LibraryPage() {
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex items-start justify-between gap-3">
                         <h3 className="font-bold text-slate-800 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-200">
-                          {doc.originalName}
+                          {doc.title || doc.originalName}
                         </h3>
-                        <StatusBadge status={doc.status} />
+                        <div className="flex items-center gap-1.5">
+                          <span className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                            {doc.documentType || 'Other'}
+                          </span>
+                          <StatusBadge status={doc.status} />
+                        </div>
                       </div>
 
                       {/* Info Metadata */}
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                        <span className="flex items-center gap-1">
-                          <Folder className="h-3.5 w-3.5" />
-                          {doc.category}
-                        </span>
-                        <span>&middot;</span>
-                        <span>{(doc.fileSize / 1024).toFixed(1)} KB</span>
-                        <span>&middot;</span>
-                        <span className="flex items-center gap-1">
-                          <Calendar className="h-3.5 w-3.5" />
-                          {new Date(doc.uploadedAt).toLocaleDateString()}
-                        </span>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-slate-400">
+                        {movingDocId === doc._id ? (
+                          <div className="flex items-center gap-2 py-0.5" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Move to:</span>
+                            <select
+                              value={doc.category}
+                              onChange={async (e) => {
+                                const newFolder = e.target.value;
+                                if (!newFolder) return;
+                                try {
+                                  await api.updateDocumentMetadata(doc._id, { category: newFolder });
+                                  fetchDocuments(true);
+                                } catch (err) {
+                                  alert('Move failed');
+                                } finally {
+                                  setMovingDocId(null);
+                                }
+                              }}
+                              className="text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-2 py-1 outline-none text-slate-800 dark:text-white"
+                              autoFocus
+                            >
+                              {categories.map((c) => (
+                                <option key={c._id} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setMovingDocId(null);
+                              }}
+                              className="p-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-400"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="flex items-center gap-1">
+                              <Folder className="h-3.5 w-3.5" />
+                              {doc.category}
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setMovingDocId(doc._id);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-900 dark:hover:text-white transition-all duration-200"
+                              title="Move Folder"
+                            >
+                              <Folder className="h-3.5 w-3.5" />
+                            </button>
+                            <span>&middot;</span>
+                            <span>{(doc.fileSize / 1024).toFixed(1)} KB</span>
+                            <span>&middot;</span>
+                            <span className="flex items-center gap-1">
+                              <Calendar className="h-3.5 w-3.5" />
+                              {new Date(doc.uploadedAt).toLocaleDateString()}
+                            </span>
+                            {doc.uploadedBy && (
+                              <>
+                                <span>&middot;</span>
+                                <span className="text-slate-500 dark:text-slate-400 font-medium">by {doc.uploadedBy}</span>
+                              </>
+                            )}
+                          </>
+                        )}
                       </div>
 
                       {/* Tags */}
@@ -228,6 +425,73 @@ export default function LibraryPage() {
           })}
         </motion.div>
       )}
+
+      {/* Inline Folder Creation Modal */}
+      <AnimatePresence>
+        {showNewFolderModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowNewFolderModal(false)}
+              className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm dark:bg-black/60"
+            />
+            {/* Modal Box */}
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white/95 dark:border-white/5 dark:bg-slate-950/85 p-6 shadow-2xl backdrop-blur-2xl"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <FolderPlus className="h-5 w-5 text-blue-500" />
+                  Create New Folder
+                </h3>
+                <button
+                  onClick={() => setShowNewFolderModal(false)}
+                  className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+                >
+                  <X className="h-4.5 w-4.5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateFolder} className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-400">Folder Name</label>
+                  <input
+                    type="text"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder="e.g. Invoices, Clients"
+                    className="input-field"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={creatingFolder || !newFolderName.trim()}
+                    className="btn-primary flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2"
+                  >
+                    {creatingFolder ? 'Creating...' : 'Create Folder'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewFolderModal(false)}
+                    className="btn-secondary flex-1 py-3 text-sm font-bold"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
