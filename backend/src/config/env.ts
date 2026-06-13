@@ -26,4 +26,8 @@ export const env = {
   maxFileSizeMb: parseInt(process.env.MAX_FILE_SIZE_MB || '25', 10),
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
   embeddingDimensions: 1536,
+  ocrProvider: process.env.OCR_PROVIDER || 'tesseract',
+  ocrLang: process.env.OCR_LANG || 'eng',
+  ocrMaxPdfPages: parseInt(process.env.OCR_MAX_PDF_PAGES || '50', 10),
+  ocrMinTextLength: parseInt(process.env.OCR_MIN_TEXT_LENGTH || '50', 10),
 };

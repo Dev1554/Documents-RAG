@@ -104,9 +104,17 @@ class ApiClient {
   }
 
   async getDocument(id: string) {
-    return this.request<ApiResponse<{ document: Document; related: Document[] }>>(
+    return this.request<ApiResponse<{ document: Document; related: Document[]; versions: Document[] }>>(
       `/documents/${id}`
     );
+  }
+
+  async getDocumentVersions(id: string) {
+    return this.request<ApiResponse<Document[]>>(`/documents/${id}/versions`);
+  }
+
+  async getDocumentSummary(id: string) {
+    return this.request<ApiResponse<DocumentSummary>>(`/documents/${id}/summary`);
   }
 
   async deleteDocument(id: string) {
@@ -170,12 +178,22 @@ export interface Document {
   fileSize: number;
   category: string;
   tags: string[];
+  versionGroupKey?: string;
+  versionNumber?: number;
+  versionLabel?: string;
+  isLatestVersion?: boolean;
   status: 'pending' | 'processing' | 'ready' | 'failed' | 'pending_ocr';
   chunkCount: number;
+  aiSummary?: string;
   errorMessage?: string;
   uploadedAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DocumentSummary {
+  summary: string;
+  cached: boolean;
 }
 
 export interface DashboardStats {
@@ -232,3 +250,11 @@ export interface ChatHistoryItem {
 }
 
 export const api = new ApiClient();
+
+export function getFileUrl(fileUrl: string): string {
+  if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+  if (!/^https?:\/\//i.test(API_BASE)) return fileUrl;
+
+  const apiOrigin = new URL(API_BASE).origin;
+  return `${apiOrigin}${fileUrl.startsWith('/') ? fileUrl : `/${fileUrl}`}`;
+}

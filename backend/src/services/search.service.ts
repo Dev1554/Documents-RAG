@@ -5,6 +5,10 @@ import { generateEmbedding } from './embedding.service';
 import { searchVectors } from './qdrant.service';
 import { DocumentFilters, SearchResult } from '../types';
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export async function keywordSearch(
   userId: string,
   filters: DocumentFilters
@@ -26,12 +30,25 @@ export async function keywordSearch(
   }
 
   if (filters.keyword) {
-    const documents = await DocumentModel.find({
+    const textDocuments = await DocumentModel.find({
       ...query,
       $text: { $search: filters.keyword },
     })
-      .select('_id title originalName category tags')
+      .select('_id title originalName category tags aiSummary')
       .lean();
+
+    const summaryDocuments = await DocumentModel.find({
+      ...query,
+      aiSummary: { $regex: escapeRegex(filters.keyword), $options: 'i' },
+    })
+      .select('_id title originalName category tags aiSummary')
+      .limit(20)
+      .lean();
+
+    const documents = [...textDocuments, ...summaryDocuments].filter(
+      (doc, index, allDocs) =>
+        allDocs.findIndex((candidate) => candidate._id.toString() === doc._id.toString()) === index
+    );
 
     if (documents.length === 0) return [];
 
@@ -46,7 +63,7 @@ export async function keywordSearch(
       .limit(20)
       .lean();
 
-    return chunks.map((chunk) => {
+    const results = chunks.map((chunk) => {
       const doc = docMap.get(chunk.documentId.toString())!;
       return {
         chunkId: chunk._id.toString(),
@@ -60,6 +77,25 @@ export async function keywordSearch(
         pageNumber: chunk.pageNumber || 1,
       };
     });
+
+    const chunkDocIds = new Set(chunks.map((chunk) => chunk.documentId.toString()));
+    for (const doc of documents) {
+      if (chunkDocIds.has(doc._id.toString())) continue;
+
+      results.push({
+        chunkId: doc._id.toString(),
+        documentId: doc._id.toString(),
+        documentName: doc.title || doc.originalName,
+        category: doc.category,
+        tags: doc.tags,
+        content: doc.aiSummary || doc.title || doc.originalName,
+        score: 1,
+        chunkIndex: 0,
+        pageNumber: 1,
+      });
+    }
+
+    return results;
   }
 
   const documents = await DocumentModel.find(query)

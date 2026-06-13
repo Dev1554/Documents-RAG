@@ -3,6 +3,7 @@ import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import { storageService } from './storage.service';
 import { AppError } from '../utils/AppError';
+import { needsOcrFallback, ocrFromImage, ocrFromPdf } from './ocr.service';
 
 const IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/tiff'];
 
@@ -51,8 +52,13 @@ export async function extractText(filePath: string, mimeType: string): Promise<T
     const data = await pdfParse(buffer, options);
     pages.sort((a, b) => a.pageNumber - b.pageNumber);
 
+    const nativeText = data.text.trim();
+    if (needsOcrFallback(nativeText)) {
+      return ocrFromPdf(absolutePath);
+    }
+
     return {
-      text: data.text.trim(),
+      text: nativeText,
       pages,
     };
   }
@@ -80,10 +86,7 @@ export async function extractText(filePath: string, mimeType: string): Promise<T
   }
 
   if (IMAGE_MIME_TYPES.includes(mimeType)) {
-    return {
-      text: '',
-      pages: [],
-    };
+    return ocrFromImage(absolutePath);
   }
 
   throw new AppError(`Unsupported file type: ${mimeType}`, 400);

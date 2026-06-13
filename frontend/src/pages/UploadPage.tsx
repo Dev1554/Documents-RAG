@@ -82,7 +82,7 @@ export default function UploadPage() {
 
   const steps = [
     { label: 'File Upload', desc: 'Sending file payload to server...', icon: Upload },
-    { label: 'OCR & Analysis', desc: 'Parsing raw text content and structures...', icon: FileText },
+    { label: 'OCR & Analysis', desc: 'Parsing text, summary, and AI tags...', icon: FileText },
     { label: 'Semantic Chunking', desc: 'Splitting document content into sliding windows...', icon: Cpu },
     { label: 'Vector Indexing', desc: 'Generating HNSW search vectors...', icon: Database },
   ];
@@ -245,17 +245,20 @@ export default function UploadPage() {
               <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
                   <Tag className="h-4 w-4 text-teal-500" />
-                  Metadata tags
+                  AI Tags
                 </h3>
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Search Tags (comma-separated)</label>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Optional Manual Tags</label>
                   <input
                     type="text"
                     value={tags}
                     onChange={(e) => setTags(e.target.value)}
                     className="input-field"
-                    placeholder="e.g. invoice, year-2026, agreement"
+                    placeholder="AI will add tags like GST, Tax, Certificate"
                   />
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+                    Leave this blank to let AI classify the document automatically.
+                  </p>
                 </div>
               </div>
             </div>

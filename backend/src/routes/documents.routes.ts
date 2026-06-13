@@ -14,7 +14,9 @@ import {
   processDocument,
   listDocuments,
   getDocumentById,
+  getDocumentVersions,
   getRelatedDocuments,
+  summarizeDocument,
   deleteDocument,
   getDashboardStats,
 } from '../services/documentProcessing.service';
@@ -62,6 +64,60 @@ function parseFilters(query: Record<string, unknown>): DocumentFilters {
   return filters;
 }
 
+function normalizeVersionBase(value: string): string {
+  const base = value.substring(0, value.lastIndexOf('.')) || value;
+  return base
+    .replace(/\b(?:v|version)[\s_-]*\d+\b/gi, '')
+    .replace(/\s*\(\d+\)\s*$/g, '')
+    .replace(/[_-]/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function extractExplicitVersion(value: string): number | null {
+  const base = value.substring(0, value.lastIndexOf('.')) || value;
+  const match = base.match(/\b(?:v|version)[\s_-]*(\d+)\b/i);
+  if (!match) return null;
+
+  const version = Number(match[1]);
+  return Number.isFinite(version) && version > 0 ? version : null;
+}
+
+async function resolveVersionMetadata(
+  userId: string,
+  title: string,
+  originalName: string,
+  category: string,
+  documentType: string
+) {
+  const baseKey = normalizeVersionBase(title) || normalizeVersionBase(originalName);
+  const versionGroupKey = [category, documentType, baseKey].join('|').toLowerCase();
+  const explicitVersion = extractExplicitVersion(title) || extractExplicitVersion(originalName);
+
+  const latestVersion = await DocumentModel.findOne({ userId, versionGroupKey })
+    .sort({ versionNumber: -1 })
+    .select('versionNumber')
+    .lean();
+
+  const versionNumber = explicitVersion || ((latestVersion?.versionNumber || 0) + 1);
+  const isLatestVersion = versionNumber >= (latestVersion?.versionNumber || 0);
+
+  if (isLatestVersion) {
+    await DocumentModel.updateMany(
+      { userId, versionGroupKey, isLatestVersion: true },
+      { $set: { isLatestVersion: false } }
+    );
+  }
+
+  return {
+    versionGroupKey,
+    versionNumber,
+    versionLabel: `v${versionNumber}`,
+    isLatestVersion,
+  };
+}
+
 router.get(
   '/stats',
   asyncHandler(async (req: AuthRequest, res) => {
@@ -106,6 +162,13 @@ router.post(
     const finalDocType = documentType?.trim() || 'Other';
     const ext = req.file.originalname.split('.').pop() || '';
     const fileType = ext.toUpperCase() || 'PDF';
+    const versionMetadata = await resolveVersionMetadata(
+      req.user!.id,
+      finalTitle,
+      req.file.originalname,
+      category,
+      finalDocType
+    );
 
     const stored = await storageService.saveFile(req.file, req.user!.id);
 
@@ -123,6 +186,7 @@ router.post(
       fileSize: stored.size,
       category,
       tags: tagList,
+      ...versionMetadata,
       status: 'pending',
     });
 
@@ -142,17 +206,33 @@ router.get(
 );
 
 router.get(
+  '/:id/summary',
+  asyncHandler(async (req: AuthRequest, res) => {
+    const result = await summarizeDocument(req.user!.id, String(req.params.id));
+    res.json({ success: true, data: result });
+  })
+);
+
+router.get(
+  '/:id/versions',
+  asyncHandler(async (req: AuthRequest, res) => {
+    const document = await getDocumentById(req.user!.id, String(req.params.id));
+    const versions = await getDocumentVersions(req.user!.id, document);
+    res.json({ success: true, data: versions });
+  })
+);
+
+router.get(
   '/:id',
   asyncHandler(async (req: AuthRequest, res) => {
     const id = String(req.params.id);
     const document = await getDocumentById(req.user!.id, id);
     const related = await getRelatedDocuments(
       req.user!.id,
-      id,
-      document.category,
-      document.tags
+      document
     );
-    res.json({ success: true, data: { document, related } });
+    const versions = await getDocumentVersions(req.user!.id, document);
+    res.json({ success: true, data: { document, related, versions } });
   })
 );
 

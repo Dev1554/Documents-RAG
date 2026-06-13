@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { api, Document, Category } from '../lib/api';
+import { api, Document, Category, getFileUrl } from '../lib/api';
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -41,6 +41,7 @@ export default function DocumentDetailPage() {
   const navigate = useNavigate();
   const [document, setDocument] = useState<Document | null>(null);
   const [related, setRelated] = useState<Document[]>([]);
+  const [versions, setVersions] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -50,6 +51,9 @@ export default function DocumentDetailPage() {
   const [editDocType, setEditDocType] = useState('');
   const [editTags, setEditTags] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [summary, setSummary] = useState('');
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
 
   useEffect(() => {
     if (!id) return;
@@ -61,11 +65,31 @@ export default function DocumentDetailPage() {
       .then(([docRes, catRes]) => {
         setDocument(docRes.data.document);
         setRelated(docRes.data.related);
+        setVersions(docRes.data.versions || []);
         setCategories(catRes.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    if (!id || !document || document.status !== 'ready') return;
+
+    if (document.aiSummary) {
+      setSummary(document.aiSummary);
+      return;
+    }
+
+    setSummaryLoading(true);
+    setSummaryError('');
+
+    api.getDocumentSummary(id)
+      .then((res) => setSummary(res.data.summary))
+      .catch((err) => {
+        setSummaryError(err instanceof Error ? err.message : 'Unable to generate summary');
+      })
+      .finally(() => setSummaryLoading(false));
+  }, [id, document?._id, document?.status, document?.aiSummary]);
 
   const startEditing = () => {
     if (!document) return;
@@ -127,6 +151,7 @@ export default function DocumentDetailPage() {
   }
 
   const isPdf = document.mimeType === 'application/pdf';
+  const fileUrl = getFileUrl(document.fileUrl);
 
   return (
     <div className="space-y-6">
@@ -152,6 +177,9 @@ export default function DocumentDetailPage() {
           </h1>
           <div className="mt-2.5 flex flex-wrap items-center gap-3">
             <StatusBadge status={document.status} />
+            <span className="rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider bg-slate-500/10 text-slate-500 dark:text-slate-300 border border-slate-500/20">
+              {document.versionLabel || `v${document.versionNumber || 1}`}
+            </span>
             {document.documentType && (
               <span className="rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
                 {document.documentType}
@@ -164,7 +192,7 @@ export default function DocumentDetailPage() {
         </div>
 
         <div className="flex items-center gap-3 self-start md:self-auto">
-          <a href={document.fileUrl} download className="btn-secondary py-2.5">
+          <a href={fileUrl} download={document.originalName} className="btn-secondary py-2.5">
             <Download className="mr-1.5 h-4 w-4" />
             Download
           </a>
@@ -190,7 +218,7 @@ export default function DocumentDetailPage() {
           {isPdf ? (
             <div className="rounded-3xl border border-slate-200/80 bg-white/40 dark:border-white/5 dark:bg-slate-950/20 overflow-hidden shadow-sm p-1 backdrop-blur-xl">
               <iframe
-                src={document.fileUrl}
+                src={fileUrl}
                 className="h-[650px] w-full rounded-2xl"
                 title={document.originalName}
               />
@@ -204,7 +232,7 @@ export default function DocumentDetailPage() {
                 <h3 className="font-bold text-slate-800 dark:text-white">Preview Unavailable</h3>
                 <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">This browser does not support inline previews for this MIME type. Download the source payload to inspect details.</p>
               </div>
-              <a href={document.fileUrl} download className="btn-primary mt-4 inline-flex">
+              <a href={fileUrl} download={document.originalName} className="btn-primary mt-4 inline-flex">
                 Download Resource
               </a>
             </div>
@@ -218,6 +246,37 @@ export default function DocumentDetailPage() {
           transition={{ delay: 0.2 }}
           className="space-y-6"
         >
+          {/* AI Summary */}
+          <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-blue-500/10 text-blue-600 dark:text-teal-400 border border-blue-500/20 p-2">
+                <Sparkles className="h-4.5 w-4.5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">AI Summary</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Generated from extracted text</p>
+              </div>
+            </div>
+
+            {summaryLoading ? (
+              <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 text-sm text-slate-500 dark:border-white/5 dark:bg-slate-900/50 dark:text-slate-400">
+                Generating summary...
+              </div>
+            ) : summary ? (
+              <p className="whitespace-pre-line text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {summary}
+              </p>
+            ) : summaryError ? (
+              <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 text-sm text-amber-600 dark:text-amber-400">
+                {summaryError}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 text-sm text-slate-500 dark:border-white/5 dark:bg-slate-900/50 dark:text-slate-400">
+                Summary will be available when document processing is complete.
+              </div>
+            )}
+          </div>
+
           {/* Metadata Grid */}
           <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-5">
             {isEditing ? (
@@ -371,6 +430,19 @@ export default function DocumentDetailPage() {
                   </div>
 
                   <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-indigo-500/10 text-indigo-500 border border-indigo-500/20 p-2">
+                      <Clock className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Version</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                        {document.versionLabel || `v${document.versionNumber || 1}`}
+                        {document.isLatestVersion ? ' · Latest' : ''}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
                     <div className="rounded-xl bg-slate-500/10 text-slate-500 dark:text-slate-400 border border-slate-500/20 p-2">
                       <Calendar className="h-4.5 w-4.5" />
                     </div>
@@ -430,10 +502,59 @@ export default function DocumentDetailPage() {
             )}
           </div>
 
+          {/* Version History */}
+          {versions.length > 0 && (
+            <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+              <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Version History</h2>
+              <div className="space-y-3">
+                {versions.map((version) => {
+                  const isCurrent = version._id === document._id;
+
+                  return (
+                    <Link
+                      key={version._id}
+                      to={`/documents/${version._id}`}
+                      className={`group flex items-center justify-between rounded-2xl border p-3.5 transition-all duration-200 ${
+                        isCurrent
+                          ? 'border-blue-500/30 bg-blue-500/5'
+                          : 'border-slate-100 hover:border-blue-500/30 hover:bg-blue-500/5 dark:border-white/5'
+                      }`}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                            {version.versionLabel || `v${version.versionNumber || 1}`}
+                          </p>
+                          {version.isLatestVersion && (
+                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-500">
+                              Latest
+                            </span>
+                          )}
+                          {isCurrent && (
+                            <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-500">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-[10px] text-slate-400">
+                          {version.originalName}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-slate-400">
+                          Uploaded {new Date(version.uploadedAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-blue-500" />
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Related Documents */}
           {related.length > 0 && (
             <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
-              <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Related Contexts</h2>
+              <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Linked Documents</h2>
               <div className="space-y-3">
                 {related.map((doc) => (
                   <Link
@@ -443,9 +564,16 @@ export default function DocumentDetailPage() {
                   >
                     <div className="min-w-0 pr-2">
                       <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                        {doc.originalName}
+                        {doc.title || doc.originalName}
                       </p>
-                      <p className="text-[10px] text-slate-400 uppercase mt-0.5">{doc.category}</p>
+                      <p className="text-[10px] text-slate-400 uppercase mt-0.5">
+                        {doc.documentType || 'Document'} &middot; {doc.category}
+                      </p>
+                      {doc.tags.length > 0 && (
+                        <p className="mt-1 truncate text-[10px] text-slate-400">
+                          {doc.tags.slice(0, 3).join(' / ')}
+                        </p>
+                      )}
                     </div>
                     <div className="h-7 w-7 rounded-lg bg-slate-100 dark:bg-slate-900 flex items-center justify-center text-slate-400 group-hover:bg-blue-600 group-hover:text-white transition-colors">
                       <ChevronRight className="h-4 w-4" />
