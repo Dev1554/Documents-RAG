@@ -18,7 +18,21 @@ import {
   X,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { api, Document, Category, getFileUrl } from '../lib/api';
+import { api, Document, Category, FolderTreeNode, FolderBreadcrumb, DocumentAuditLog } from '../lib/api';
+
+function flattenFolderTree(
+  nodes: FolderTreeNode[],
+  depth = 0
+): Array<FolderTreeNode & { indent: number }> {
+  const result: Array<FolderTreeNode & { indent: number }> = [];
+  for (const node of nodes) {
+    result.push({ ...node, indent: depth });
+    if (node.children.length > 0) {
+      result.push(...flattenFolderTree(node.children, depth + 1));
+    }
+  }
+  return result;
+}
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -36,18 +50,68 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function formatFieldLabel(value: string): string {
+  return value
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/[_-]/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatExtractedValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'Not found';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 'None';
+    return value
+      .map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item)))
+      .join(', ');
+  }
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function formatAuditAction(action: DocumentAuditLog['action']): string {
+  const labels: Record<DocumentAuditLog['action'], string> = {
+    uploaded: 'Uploaded',
+    viewed: 'Viewed',
+    downloaded: 'Downloaded',
+    deleted: 'Deleted',
+  };
+
+  return labels[action];
+}
+
+function getAuditActionStyles(action: DocumentAuditLog['action']): string {
+  const styles: Record<DocumentAuditLog['action'], string> = {
+    uploaded: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+    viewed: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
+    downloaded: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20',
+    deleted: 'bg-red-500/10 text-red-500 border-red-500/20',
+  };
+
+  return styles[action];
+}
+
 export default function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [document, setDocument] = useState<Document | null>(null);
   const [related, setRelated] = useState<Document[]>([]);
   const [versions, setVersions] = useState<Document[]>([]);
+  const [auditLogs, setAuditLogs] = useState<DocumentAuditLog[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [categories, setCategories] = useState<Category[]>([]);
+  const [folderOptions, setFolderOptions] = useState<Array<FolderTreeNode & { indent: number }>>([]);
+  const [folderBreadcrumb, setFolderBreadcrumb] = useState<FolderBreadcrumb[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [editFolderId, setEditFolderId] = useState('');
   const [editDocType, setEditDocType] = useState('');
   const [editTags, setEditTags] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -58,15 +122,17 @@ export default function DocumentDetailPage() {
   useEffect(() => {
     if (!id) return;
     setLoading(true);
-    Promise.all([
-      api.getDocument(id),
-      api.getCategories()
-    ])
-      .then(([docRes, catRes]) => {
+    Promise.all([api.getCategories(), api.getFolderTree()])
+      .then(async ([catRes, folderRes]) => {
+        const docRes = await api.getDocument(id);
+        const auditRes = await api.getDocumentAuditLogs(id);
         setDocument(docRes.data.document);
         setRelated(docRes.data.related);
         setVersions(docRes.data.versions || []);
+        setFolderBreadcrumb(docRes.data.folderBreadcrumb || []);
         setCategories(catRes.data);
+        setFolderOptions(flattenFolderTree(folderRes.data));
+        setAuditLogs(auditRes.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -95,6 +161,7 @@ export default function DocumentDetailPage() {
     if (!document) return;
     setEditTitle(document.title || document.originalName);
     setEditCategory(document.category);
+    setEditFolderId(document.folderId || '');
     setEditDocType(document.documentType || 'Other');
     setEditTags(document.tags.join(', '));
     setIsEditing(true);
@@ -108,10 +175,18 @@ export default function DocumentDetailPage() {
       const res = await api.updateDocumentMetadata(id, {
         title: editTitle,
         category: editCategory,
+        folderId: editFolderId || null,
         documentType: editDocType,
         tags: editTags,
       });
       setDocument(res.data);
+      if (editFolderId) {
+        api.getFolderBreadcrumbs(editFolderId).then((breadcrumbRes) => {
+          setFolderBreadcrumb(breadcrumbRes.data);
+        });
+      } else {
+        setFolderBreadcrumb([]);
+      }
       setIsEditing(false);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Save failed');
@@ -151,7 +226,18 @@ export default function DocumentDetailPage() {
   }
 
   const isPdf = document.mimeType === 'application/pdf';
-  const fileUrl = getFileUrl(document.fileUrl);
+  const isImage = document.mimeType.startsWith('image/');
+  const canPreview = isPdf || isImage;
+  const previewUrl = api.getDocumentPreviewUrl(document._id);
+  const downloadUrl = api.getDocumentDownloadUrl(document._id);
+  const extractedData = isRecord(document.extractedData) ? document.extractedData : null;
+  const extractedFields = isRecord(extractedData?.fields) ? extractedData.fields : {};
+  const extractedTransactions = Array.isArray(extractedData?.transactions)
+    ? extractedData.transactions
+    : [];
+  const extractionNotes = Array.isArray(extractedData?.notes)
+    ? extractedData.notes.filter((note): note is string => typeof note === 'string')
+    : [];
 
   return (
     <div className="space-y-6">
@@ -192,7 +278,7 @@ export default function DocumentDetailPage() {
         </div>
 
         <div className="flex items-center gap-3 self-start md:self-auto">
-          <a href={fileUrl} download={document.originalName} className="btn-secondary py-2.5">
+          <a href={downloadUrl} download={document.originalName} className="btn-secondary py-2.5">
             <Download className="mr-1.5 h-4 w-4" />
             Download
           </a>
@@ -215,13 +301,23 @@ export default function DocumentDetailPage() {
           transition={{ delay: 0.1 }}
           className="lg:col-span-2 space-y-4"
         >
-          {isPdf ? (
+          {canPreview ? (
             <div className="rounded-3xl border border-slate-200/80 bg-white/40 dark:border-white/5 dark:bg-slate-950/20 overflow-hidden shadow-sm p-1 backdrop-blur-xl">
-              <iframe
-                src={fileUrl}
-                className="h-[650px] w-full rounded-2xl"
-                title={document.originalName}
-              />
+              {isPdf ? (
+                <iframe
+                  src={previewUrl}
+                  className="h-[650px] w-full rounded-2xl"
+                  title={document.originalName}
+                />
+              ) : (
+                <div className="flex min-h-[400px] max-h-[650px] items-center justify-center overflow-auto rounded-2xl bg-slate-100/50 p-4 dark:bg-slate-900/30">
+                  <img
+                    src={previewUrl}
+                    alt={document.title || document.originalName}
+                    className="max-h-[620px] w-auto max-w-full object-contain rounded-lg shadow-sm"
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div className="rounded-3xl border border-slate-200/80 bg-white/70 dark:border-white/5 dark:bg-slate-950/45 py-24 text-center backdrop-blur-xl flex flex-col items-center justify-center space-y-4">
@@ -232,7 +328,7 @@ export default function DocumentDetailPage() {
                 <h3 className="font-bold text-slate-800 dark:text-white">Preview Unavailable</h3>
                 <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">This browser does not support inline previews for this MIME type. Download the source payload to inspect details.</p>
               </div>
-              <a href={fileUrl} download={document.originalName} className="btn-primary mt-4 inline-flex">
+              <a href={downloadUrl} download={document.originalName} className="btn-primary mt-4 inline-flex">
                 Download Resource
               </a>
             </div>
@@ -276,6 +372,64 @@ export default function DocumentDetailPage() {
               </div>
             )}
           </div>
+
+          {/* AI Extraction */}
+          {extractedData && (
+            <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">AI Extraction</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  {formatExtractedValue(extractedData.documentKind || 'Document')} &middot; Confidence {Math.round(Number(extractedData.confidence || 0) * 100)}%
+                </p>
+              </div>
+
+              {Object.keys(extractedFields).length > 0 ? (
+                <div className="space-y-2">
+                  {Object.entries(extractedFields).map(([key, value]) => (
+                    <div key={key} className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 dark:border-white/5 dark:bg-slate-900/50">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        {formatFieldLabel(key)}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200 break-words">
+                        {formatExtractedValue(value)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 text-sm text-slate-500 dark:border-white/5 dark:bg-slate-900/50 dark:text-slate-400">
+                  No structured fields were extracted.
+                </div>
+              )}
+
+              {extractedTransactions.length > 0 && (
+                <div className="pt-2">
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Transactions ({extractedTransactions.length})
+                  </p>
+                  <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                    {extractedTransactions.slice(0, 20).map((transaction, index) => (
+                      <div key={index} className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs text-slate-600 dark:border-white/5 dark:bg-slate-900/50 dark:text-slate-300">
+                        {isRecord(transaction)
+                          ? Object.entries(transaction).map(([key, value]) => (
+                              <p key={key}>
+                                <span className="font-bold">{formatFieldLabel(key)}:</span> {formatExtractedValue(value)}
+                              </p>
+                            ))
+                          : formatExtractedValue(transaction)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {extractionNotes.length > 0 && (
+                <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 text-sm text-amber-600 dark:text-amber-400">
+                  {extractionNotes.join(' ')}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Metadata Grid */}
           <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-5">
@@ -325,6 +479,22 @@ export default function DocumentDetailPage() {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">Folder</label>
+                    <select
+                      value={editFolderId}
+                      onChange={(e) => setEditFolderId(e.target.value)}
+                      className="input-field py-2"
+                    >
+                      <option value="" className="dark:bg-slate-950">No folder</option>
+                      {folderOptions.map((folder) => (
+                        <option key={folder._id} value={folder._id} className="dark:bg-slate-950">
+                          {'—'.repeat(folder.indent)} {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Category</label>
                     <select
                       value={editCategory}
                       onChange={(e) => setEditCategory(e.target.value)}
@@ -393,6 +563,20 @@ export default function DocumentDetailPage() {
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Folder</p>
+                      <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                        {folderBreadcrumb.length > 0
+                          ? folderBreadcrumb.map((crumb) => crumb.name).join(' / ')
+                          : 'Unfiled'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3.5">
+                    <div className="rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 p-2">
+                      <Tag className="h-4.5 w-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Category</p>
                       <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5">{document.category}</p>
                     </div>
                   </div>
@@ -499,6 +683,58 @@ export default function DocumentDetailPage() {
                   </div>
                 )}
               </>
+            )}
+          </div>
+
+          {/* Audit Logs */}
+          <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-white">Audit Log</h2>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Recent document activity
+              </p>
+            </div>
+
+            {auditLogs.length > 0 ? (
+              <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+                {auditLogs.map((log) => (
+                  <div
+                    key={log._id}
+                    className="rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 dark:border-white/5 dark:bg-slate-900/50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${getAuditActionStyles(log.action)}`}>
+                            {formatAuditAction(log.action)}
+                          </span>
+                          <span className="text-[10px] font-semibold text-slate-400">
+                            {new Date(log.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs font-bold text-slate-700 dark:text-slate-200">
+                          {log.userName || log.userEmail}
+                        </p>
+                        <p className="mt-0.5 truncate text-[10px] text-slate-400">
+                          {log.userEmail}
+                        </p>
+                      </div>
+                      <Clock className="mt-1 h-4 w-4 shrink-0 text-slate-300 dark:text-slate-600" />
+                    </div>
+
+                    {(log.ipAddress || log.userAgent) && (
+                      <div className="mt-3 border-t border-slate-100 pt-2 text-[10px] leading-5 text-slate-400 dark:border-white/5">
+                        {log.ipAddress && <p>IP: {log.ipAddress}</p>}
+                        {log.userAgent && <p className="line-clamp-2">Agent: {log.userAgent}</p>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 text-sm text-slate-500 dark:border-white/5 dark:bg-slate-900/50 dark:text-slate-400">
+                No audit activity has been recorded for this document yet.
+              </div>
             )}
           </div>
 

@@ -3,6 +3,7 @@ import { connectDB } from './config/db';
 import { env } from './config/env';
 import { ensureQdrantCollection } from './services/qdrant.service';
 import { seedDefaultCategories } from './services/category.service';
+import { migrateAllUsersFolders } from './services/folder.service';
 import fs from 'fs';
 import path from 'path';
 
@@ -14,6 +15,9 @@ async function bootstrap() {
 
   await connectDB();
   await seedDefaultCategories();
+  await migrateAllUsersFolders().catch((error) => {
+    console.error('Folder migration failed:', error);
+  });
 
   try {
     await ensureQdrantCollection();

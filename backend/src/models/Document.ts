@@ -14,6 +14,7 @@ export interface IDocument extends Document {
   mimeType: string;
   fileSize: number;
   category: string;
+  folderId?: Types.ObjectId;
   tags: string[];
   versionGroupKey: string;
   versionNumber: number;
@@ -22,6 +23,7 @@ export interface IDocument extends Document {
   status: DocumentStatus;
   extractedText?: string;
   aiSummary?: string;
+  extractedData?: Record<string, unknown>;
   chunkCount: number;
   errorMessage?: string;
   uploadedAt: Date;
@@ -43,6 +45,7 @@ const documentSchema = new Schema<IDocument>(
     mimeType: { type: String, required: true },
     fileSize: { type: Number, required: true },
     category: { type: String, required: true, index: true },
+    folderId: { type: Schema.Types.ObjectId, ref: 'Folder', index: true },
     tags: { type: [String], default: [], index: true },
     versionGroupKey: { type: String, required: true, index: true },
     versionNumber: { type: Number, required: true, default: 1 },
@@ -55,6 +58,7 @@ const documentSchema = new Schema<IDocument>(
     },
     extractedText: { type: String },
     aiSummary: { type: String },
+    extractedData: { type: Schema.Types.Mixed },
     chunkCount: { type: Number, default: 0 },
     errorMessage: { type: String },
     uploadedAt: { type: Date, default: Date.now, index: true },
