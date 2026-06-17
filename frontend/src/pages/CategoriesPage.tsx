@@ -50,11 +50,11 @@ export default function CategoriesPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
-          Workspace Folders
+          Document Categories
           <Sparkles className="h-5 w-5 text-blue-500 animate-pulse-slow" />
         </h1>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Create and organize folder partitions to classify your document assets.
+          Manage classification categories used for metadata and search filters. Folder organization is managed in the Vault.
         </p>
       </div>
 
