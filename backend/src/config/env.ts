@@ -30,4 +30,5 @@ export const env = {
   ocrLang: process.env.OCR_LANG || 'eng',
   ocrMaxPdfPages: parseInt(process.env.OCR_MAX_PDF_PAGES || '50', 10),
   ocrMinTextLength: parseInt(process.env.OCR_MIN_TEXT_LENGTH || '50', 10),
+  ocrPdfScale: parseFloat(process.env.OCR_PDF_SCALE || '3'),
 };

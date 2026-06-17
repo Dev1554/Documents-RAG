@@ -14,6 +14,8 @@ export interface AuthRequest extends Request {
 export interface DocumentFilters {
   keyword?: string;
   category?: string;
+  folderId?: string;
+  includeNested?: boolean;
   tags?: string[];
   dateFrom?: Date;
   dateTo?: Date;

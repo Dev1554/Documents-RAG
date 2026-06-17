@@ -8,3 +8,4 @@ build/
 backend/uploads/
 .vite/
 coverage/
+*.traineddata

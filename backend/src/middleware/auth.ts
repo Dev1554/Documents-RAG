@@ -12,12 +12,13 @@ interface JwtPayload {
 
 export function authenticate(req: AuthRequest, _res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
 
-  if (!authHeader?.startsWith('Bearer ')) {
+  if (!authHeader?.startsWith('Bearer ') && !queryToken) {
     return next(new AppError('Authentication required', 401));
   }
 
-  const token = authHeader.split(' ')[1];
+  const token = queryToken || authHeader!.split(' ')[1];
 
   try {
     const decoded = jwt.verify(token, env.jwtSecret) as JwtPayload;

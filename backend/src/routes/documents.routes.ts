@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
+import { Types } from 'mongoose';
 import { asyncHandler } from '../utils/asyncHandler';
 import { authenticate } from '../middleware/auth';
 import { AuthRequest, DocumentFilters } from '../types';
@@ -10,6 +11,13 @@ import { storageService } from '../services/storage.service';
 import { isSupportedMimeType } from '../services/textExtraction.service';
 import { DocumentModel } from '../models/Document';
 import { updateDocumentVectorsPayload } from '../services/qdrant.service';
+import { getDocumentAuditLogs, recordDocumentAudit } from '../services/audit.service';
+import {
+  getFolderBreadcrumbs,
+  getFolderOrThrow,
+  migrateUserFoldersFromCategories,
+  resolveUploadFolderId,
+} from '../services/folder.service';
 import {
   processDocument,
   listDocuments,
@@ -23,6 +31,7 @@ import {
 
 const router = Router();
 router.use(authenticate);
+const archiver: any = require('archiver');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -60,6 +69,12 @@ function parseFilters(query: Record<string, unknown>): DocumentFilters {
   if (query.year) {
     filters.year = Number(query.year);
   }
+  if (typeof query.folderId === 'string' && query.folderId.trim()) {
+    filters.folderId = query.folderId.trim();
+  }
+  if (query.includeNested === 'true' || query.includeNested === '1') {
+    filters.includeNested = true;
+  }
 
   return filters;
 }
@@ -73,6 +88,32 @@ function normalizeVersionBase(value: string): string {
     .trim()
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+function sanitizeArchiveFileName(value: string): string {
+  return value.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim() || 'document';
+}
+
+function uniqueArchiveFileName(name: string, usedNames: Set<string>): string {
+  const sanitized = sanitizeArchiveFileName(name);
+  if (!usedNames.has(sanitized)) {
+    usedNames.add(sanitized);
+    return sanitized;
+  }
+
+  const dotIndex = sanitized.lastIndexOf('.');
+  const base = dotIndex > 0 ? sanitized.slice(0, dotIndex) : sanitized;
+  const ext = dotIndex > 0 ? sanitized.slice(dotIndex) : '';
+  let counter = 2;
+  let candidate = `${base} (${counter})${ext}`;
+
+  while (usedNames.has(candidate)) {
+    counter += 1;
+    candidate = `${base} (${counter})${ext}`;
+  }
+
+  usedNames.add(candidate);
+  return candidate;
 }
 
 function extractExplicitVersion(value: string): number | null {
@@ -136,12 +177,13 @@ router.post(
 
     const schema = z.object({
       category: z.string().min(1),
+      folderId: z.string().optional(),
       tags: z.string().optional(),
       title: z.string().optional(),
       documentType: z.string().optional(),
     });
 
-    const { category, tags, title, documentType } = schema.parse(req.body);
+    const { category, folderId, tags, title, documentType } = schema.parse(req.body);
     const tagList = tags
       ? tags.split(',').map((t) => t.trim()).filter(Boolean)
       : [];
@@ -171,6 +213,7 @@ router.post(
     );
 
     const stored = await storageService.saveFile(req.file, req.user!.id);
+    const resolvedFolderId = await resolveUploadFolderId(req.user!.id, folderId, category);
 
     const document = await DocumentModel.create({
       userId: req.user!.id,
@@ -185,10 +228,13 @@ router.post(
       mimeType: stored.mimeType,
       fileSize: stored.size,
       category,
+      folderId: resolvedFolderId,
       tags: tagList,
       ...versionMetadata,
       status: 'pending',
     });
+
+    await recordDocumentAudit('uploaded', req.user!, document, req);
 
     processDocument(document._id.toString()).catch(console.error);
 
@@ -199,9 +245,86 @@ router.post(
 router.get(
   '/',
   asyncHandler(async (req: AuthRequest, res) => {
+    await migrateUserFoldersFromCategories(req.user!.id);
     const filters = parseFilters(req.query as Record<string, unknown>);
     const documents = await listDocuments(req.user!.id, filters);
     res.json({ success: true, data: documents });
+  })
+);
+
+router.get(
+  '/download-bulk',
+  asyncHandler(async (req: AuthRequest, res) => {
+    const idsParam = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const documentIds = Array.from(
+      new Set(
+        idsParam
+          .split(',')
+          .map((id) => id.trim())
+          .filter((id) => Types.ObjectId.isValid(id))
+      )
+    ).slice(0, 50);
+
+    if (documentIds.length === 0) {
+      throw new AppError('At least one valid document id is required', 400);
+    }
+
+    const documents = await DocumentModel.find({
+      _id: { $in: documentIds },
+      userId: req.user!.id,
+    }).sort({ uploadedAt: -1 });
+
+    if (documents.length === 0) {
+      throw new AppError('No downloadable documents found', 404);
+    }
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    const usedNames = new Set<string>();
+
+    archive.on('error', (error: Error) => {
+      res.destroy(error);
+    });
+
+    res.attachment(`documents-${new Date().toISOString().slice(0, 10)}.zip`);
+    archive.pipe(res);
+
+    for (const document of documents) {
+      const archiveName = uniqueArchiveFileName(document.originalName, usedNames);
+      archive.file(storageService.getAbsolutePath(document.filePath), { name: archiveName });
+      await recordDocumentAudit('downloaded', req.user!, document, req);
+    }
+
+    await archive.finalize();
+  })
+);
+
+router.get(
+  '/:id/preview',
+  asyncHandler(async (req: AuthRequest, res) => {
+    const document = await DocumentModel.findOne({ _id: String(req.params.id), userId: req.user!.id });
+    if (!document) {
+      throw new AppError('Document not found', 404);
+    }
+
+    res.sendFile(storageService.getAbsolutePath(document.filePath), {
+      headers: {
+        'Content-Type': document.mimeType,
+        'Content-Disposition': `inline; filename="${document.originalName.replace(/"/g, '')}"`,
+      },
+    });
+  })
+);
+
+router.get(
+  '/:id/download',
+  asyncHandler(async (req: AuthRequest, res) => {
+    const document = await DocumentModel.findOne({ _id: String(req.params.id), userId: req.user!.id });
+    if (!document) {
+      throw new AppError('Document not found', 404);
+    }
+
+    await recordDocumentAudit('downloaded', req.user!, document, req);
+    res.download(storageService.getAbsolutePath(document.filePath), document.originalName);
   })
 );
 
@@ -223,16 +346,32 @@ router.get(
 );
 
 router.get(
+  '/:id/audit-logs',
+  asyncHandler(async (req: AuthRequest, res) => {
+    const document = await getDocumentById(req.user!.id, String(req.params.id));
+    const logs = await getDocumentAuditLogs(document._id.toString(), req.user!.id);
+    res.json({ success: true, data: logs });
+  })
+);
+
+router.get(
   '/:id',
   asyncHandler(async (req: AuthRequest, res) => {
     const id = String(req.params.id);
     const document = await getDocumentById(req.user!.id, id);
+    await recordDocumentAudit('viewed', req.user!, document, req);
     const related = await getRelatedDocuments(
       req.user!.id,
       document
     );
     const versions = await getDocumentVersions(req.user!.id, document);
-    res.json({ success: true, data: { document, related, versions } });
+    const folderBreadcrumb = document.folderId
+      ? await getFolderBreadcrumbs(req.user!.id, document.folderId.toString())
+      : [];
+    const folder = document.folderId
+      ? await getFolderOrThrow(req.user!.id, document.folderId.toString())
+      : null;
+    res.json({ success: true, data: { document, related, versions, folder, folderBreadcrumb } });
   })
 );
 
@@ -243,6 +382,7 @@ router.put(
     const schema = z.object({
       title: z.string().min(1).optional(),
       category: z.string().min(1).optional(),
+      folderId: z.string().optional().nullable(),
       tags: z.union([z.array(z.string()), z.string()]).optional(),
       documentType: z.string().min(1).optional(),
     });
@@ -257,6 +397,14 @@ router.put(
     if (parsed.title !== undefined) document.title = parsed.title;
     if (parsed.category !== undefined) document.category = parsed.category;
     if (parsed.documentType !== undefined) document.documentType = parsed.documentType;
+    if (parsed.folderId !== undefined) {
+      if (parsed.folderId === null) {
+        document.folderId = undefined;
+      } else {
+        await getFolderOrThrow(req.user!.id, parsed.folderId);
+        document.folderId = new Types.ObjectId(parsed.folderId);
+      }
+    }
     
     let tagList: string[] | undefined;
     if (parsed.tags !== undefined) {
@@ -288,6 +436,8 @@ router.put(
 router.delete(
   '/:id',
   asyncHandler(async (req: AuthRequest, res) => {
+    const document = await getDocumentById(req.user!.id, String(req.params.id));
+    await recordDocumentAudit('deleted', req.user!, document, req);
     const result = await deleteDocument(req.user!.id, String(req.params.id));
     res.json({ success: true, data: result });
   })

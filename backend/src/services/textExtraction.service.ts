@@ -3,7 +3,7 @@ import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import { storageService } from './storage.service';
 import { AppError } from '../utils/AppError';
-import { needsOcrFallback, ocrFromImage, ocrFromPdf } from './ocr.service';
+import { needsOcrFallback, normalizeOcrText, ocrFromImage, ocrFromPdf } from './ocr.service';
 
 const IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/tiff'];
 
@@ -49,18 +49,29 @@ export async function extractText(filePath: string, mimeType: string): Promise<T
       },
     };
 
-    const data = await pdfParse(buffer, options);
-    pages.sort((a, b) => a.pageNumber - b.pageNumber);
+    try {
+      const data = await pdfParse(buffer, options);
+      pages.sort((a, b) => a.pageNumber - b.pageNumber);
 
-    const nativeText = data.text.trim();
-    if (needsOcrFallback(nativeText)) {
+      const nativeText = normalizeOcrText(data.text.trim());
+      if (needsOcrFallback(nativeText)) {
+        return ocrFromPdf(absolutePath);
+      }
+
+      return {
+        text: nativeText,
+        pages: pages.map((page) => ({
+          ...page,
+          text: normalizeOcrText(page.text),
+        })),
+      };
+    } catch (error) {
+      console.warn(
+        `PDF text extraction failed for ${filePath}; falling back to OCR.`,
+        error instanceof Error ? error.message : error
+      );
       return ocrFromPdf(absolutePath);
     }
-
-    return {
-      text: nativeText,
-      pages,
-    };
   }
 
   if (
