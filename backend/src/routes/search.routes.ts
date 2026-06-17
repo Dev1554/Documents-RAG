@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../utils/asyncHandler';
 import { authenticate } from '../middleware/auth';
 import { AuthRequest, DocumentFilters } from '../types';
-import { keywordSearch, semanticSearch, hybridSearch } from '../services/search.service';
+import { keywordSearch, semanticSearch, hybridSearch, globalAISearch } from '../services/search.service';
 
 const router = Router();
 router.use(authenticate);
@@ -38,7 +38,7 @@ router.get(
   asyncHandler(async (req: AuthRequest, res) => {
     const schema = z.object({
       q: z.string().min(1),
-      type: z.enum(['keyword', 'semantic', 'hybrid']).default('hybrid'),
+      type: z.enum(['keyword', 'semantic', 'hybrid', 'global']).default('global'),
       category: z.string().optional(),
       tags: z.string().optional(),
       dateFrom: z.string().optional(),
@@ -58,6 +58,9 @@ router.get(
         break;
       case 'semantic':
         results = await semanticSearch(req.user!.id, params.q, filters, params.limit);
+        break;
+      case 'global':
+        results = await globalAISearch(req.user!.id, params.q, filters, params.limit);
         break;
       default:
         results = await hybridSearch(req.user!.id, params.q, filters, params.limit);

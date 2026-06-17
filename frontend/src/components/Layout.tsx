@@ -22,8 +22,8 @@ const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/upload', label: 'Upload', icon: Upload },
   { to: '/library', label: 'Vault', icon: Database },
-  { to: '/chat', label: 'AI Chat', icon: MessageSquare },
-  { to: '/categories', label: 'Folders', icon: Folder },
+  { to: '/chat', label: 'AI Search', icon: MessageSquare },
+  { to: '/categories', label: 'Categories', icon: Folder },
 ];
 
 export default function Layout() {

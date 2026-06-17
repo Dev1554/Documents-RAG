@@ -4,10 +4,17 @@ import { DocumentChunk } from '../models/DocumentChunk';
 import { chunkText } from './chunking.service';
 import { generateChatCompletion, generateEmbeddings } from './embedding.service';
 import { deleteDocumentVectors, generatePointId, upsertVectors } from './qdrant.service';
+import {
+  extractGstinCandidate,
+  reconcileExtractedData,
+  reconcileFieldValue,
+} from './extractionReconcile.service';
 import { extractText } from './textExtraction.service';
 import { storageService } from './storage.service';
 import { AppError } from '../utils/AppError';
 import { DocumentFilters } from '../types';
+import { getFolderDocumentFilter } from './folder.service';
+import { applyDocumentMetadataFilters } from '../utils/documentFilterQuery';
 
 const DOCUMENT_SUMMARY_SYSTEM_PROMPT = `You summarize business documents for a document preview screen.
 Use only the provided extracted document text.
@@ -25,6 +32,11 @@ Key Details:
 Verification Notes:
 - [Anything the user should verify manually if OCR/text appears incomplete or uncertain]
 
+Rules:
+- Copy all numbers and identifiers exactly as they appear in the extracted text.
+- Never truncate, mask, abbreviate, or replace digits with X.
+- If the text shows 123456789, the summary must show 123456789 in full, not 12345.
+
 If the provided text is insufficient, say that clearly.`;
 
 const DOCUMENT_TAGS_SYSTEM_PROMPT = `You classify business documents for search filters.
@@ -39,6 +51,46 @@ Rules:
 
 Example response:
 ["GST","Tax","Certificate","Government"]`;
+
+const DOCUMENT_EXTRACTION_SYSTEM_PROMPT = `You extract structured accounting and compliance data from business documents.
+Use only the provided metadata and extracted text.
+Return ONLY valid JSON. Do not include markdown, comments, or explanation.
+
+Return this shape:
+{
+  "documentKind": "gst_certificate | invoice | bank_statement | contract | nda | pan | aadhaar | other",
+  "confidence": 0.0,
+  "fields": {},
+  "transactions": [],
+  "notes": []
+}
+
+Rules:
+- Put document-level key-value pairs under "fields".
+- Use camelCase keys.
+- Use null when a field is expected for the detected document kind but not found.
+- Keep dates as strings exactly as shown, or ISO-like strings only when obvious.
+- Keep amounts as strings with currency if present.
+- CRITICAL: Copy all numbers and identifiers exactly as they appear in the extracted text. Never truncate, mask, abbreviate, or replace digits with X. If the text shows 123456789, return 123456789 in full.
+- For numeric IDs (GSTIN, PAN, Aadhaar, account numbers, invoice numbers, phone numbers), preserve every digit and letter from the source text.
+- For GST certificates, extract gstNumber, legalName, tradeName, constitutionOfBusiness, registrationDate, issueDate, address, state, centerJurisdiction, stateJurisdiction.
+- For invoices, extract invoiceNumber, invoiceDate, dueDate, amount, taxableValue, gst, cgst, sgst, igst, client, vendor, placeOfSupply.
+- For bank statements, extract accountNumber, accountHolder, bankName, branch, ifsc, period, openingBalance, closingBalance, and put transaction rows in transactions.
+- For contracts/NDAs, extract parties, client, effectiveDate, expiryDate, contractValue, renewalTerms, terminationClause, governingLaw, signedDate.
+- notes should include OCR uncertainty or missing critical fields.
+
+Example:
+{
+  "documentKind": "gst_certificate",
+  "confidence": 0.86,
+  "fields": {
+    "gstNumber": "24ABCDE1234F1Z5",
+    "legalName": "Example Pvt Ltd",
+    "registrationDate": "01/05/2025"
+  },
+  "transactions": [],
+  "notes": []
+}`;
 
 function buildDocumentSummaryPrompt(document: {
   title: string;
@@ -72,16 +124,80 @@ Extracted text:
 ${extractedText.slice(0, 8000)}`;
 }
 
+function buildDocumentExtractionPrompt(document: {
+  title: string;
+  documentType: string;
+  category: string;
+  originalName: string;
+  tags: string[];
+}, extractedText: string) {
+  return `Document title: ${document.title}
+Document type: ${document.documentType}
+Category: ${document.category}
+Original filename: ${document.originalName}
+Tags: ${document.tags.join(', ') || 'None'}
+
+Extracted text:
+${extractedText.slice(0, 16000)}`;
+}
+
+function getExtractedStringField(
+  extractedData: Record<string, unknown> | undefined,
+  fieldKey: string
+): string | null {
+  const fields = extractedData?.fields;
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return null;
+
+  const value = (fields as Record<string, unknown>)[fieldKey];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function reconcileSummaryWithExtractedFields(
+  summary: string,
+  extractedData?: Record<string, unknown>
+): string {
+  const gstNumber = getExtractedStringField(extractedData, 'gstNumber');
+  if (!gstNumber) return summary;
+
+  return summary.replace(
+    /(GSTIN\s*[:\-]\s*)([A-Z0-9][A-Z0-9 ./-]{4,})/gi,
+    (_match, prefix: string) => `${prefix}${gstNumber}`
+  );
+}
+
+function reconcileSummaryIdentifiers(
+  summary: string,
+  extractedText: string,
+  extractedData?: Record<string, unknown>
+): string {
+  const fieldReconciled = reconcileSummaryWithExtractedFields(summary, extractedData);
+
+  return fieldReconciled.replace(/\b[A-Z0-9][A-Z0-9./-]{4,}\b/gi, (token) => {
+    if (/^\d{1,4}[./-]\d{1,2}([./-]\d{1,4})?$/.test(token)) {
+      return token;
+    }
+
+    const gstin = extractGstinCandidate(token);
+    if (gstin) {
+      return gstin;
+    }
+
+    const reconciled = reconcileFieldValue(token, extractedText);
+    return reconciled.length > token.length ? reconciled : token;
+  });
+}
+
 async function generateDocumentSummary(document: {
   title: string;
   documentType: string;
   category: string;
   originalName: string;
-}, extractedText: string): Promise<string> {
-  return generateChatCompletion(
+}, extractedText: string, extractedData?: Record<string, unknown>): Promise<string> {
+  const summary = await generateChatCompletion(
     DOCUMENT_SUMMARY_SYSTEM_PROMPT,
     buildDocumentSummaryPrompt(document, extractedText)
   );
+  return reconcileSummaryIdentifiers(summary, extractedText, extractedData);
 }
 
 function parseTagResponse(response: string): string[] {
@@ -144,6 +260,44 @@ async function generateDocumentTags(document: {
   return parseTagResponse(response);
 }
 
+function parseJsonObjectResponse(response: string): Record<string, unknown> {
+  const jsonMatch = response.match(/\{[\s\S]*\}/);
+  const candidate = jsonMatch ? jsonMatch[0] : response;
+
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Return a structured error payload rather than failing the whole ingestion.
+  }
+
+  return {
+    documentKind: 'other',
+    confidence: 0,
+    fields: {},
+    transactions: [],
+    notes: ['AI extraction response could not be parsed as JSON.'],
+  };
+}
+
+async function generateDocumentExtraction(document: {
+  title: string;
+  documentType: string;
+  category: string;
+  originalName: string;
+  tags: string[];
+}, extractedText: string): Promise<Record<string, unknown>> {
+  const response = await generateChatCompletion(
+    DOCUMENT_EXTRACTION_SYSTEM_PROMPT,
+    buildDocumentExtractionPrompt(document, extractedText)
+  );
+
+  const parsed = parseJsonObjectResponse(response);
+  return reconcileExtractedData(parsed, extractedText);
+}
+
 export async function processDocument(documentId: string): Promise<void> {
   const document = await DocumentModel.findById(documentId);
   if (!document) return;
@@ -161,13 +315,21 @@ export async function processDocument(documentId: string): Promise<void> {
         document.tags,
         await generateDocumentTags(document, 'No extractable text was found. Use the metadata only.')
       );
+      document.extractedData = {
+        documentKind: 'other',
+        confidence: 0,
+        fields: {},
+        transactions: [],
+        notes: ['No extractable text was found. Structured extraction could not be completed.'],
+      };
       document.status = 'ready';
       document.chunkCount = 0;
       await document.save();
       return;
     }
 
-    document.aiSummary = await generateDocumentSummary(document, textResult.text);
+    document.extractedData = await generateDocumentExtraction(document, textResult.text);
+    document.aiSummary = await generateDocumentSummary(document, textResult.text, document.extractedData);
     document.tags = mergeTags(document.tags, await generateDocumentTags(document, textResult.text));
 
     const chunks: Array<{
@@ -255,31 +417,16 @@ export async function processDocument(documentId: string): Promise<void> {
 export async function listDocuments(userId: string, filters: DocumentFilters) {
   const query: Record<string, unknown> = { userId: new Types.ObjectId(userId) };
 
-  if (filters.category) {
-    query.category = filters.category;
+  const folderFilter = await getFolderDocumentFilter(
+    userId,
+    filters.folderId,
+    filters.includeNested
+  );
+  if (folderFilter) {
+    Object.assign(query, folderFilter);
   }
 
-  if (filters.tags && filters.tags.length > 0) {
-    query.tags = { $in: filters.tags };
-  }
-
-  if (filters.uploadedBy) {
-    query.uploadedBy = filters.uploadedBy;
-  }
-
-  if (filters.year) {
-    const start = new Date(`${filters.year}-01-01T00:00:00.000Z`);
-    const end = new Date(`${filters.year}-12-31T23:59:59.999Z`);
-    query.uploadedAt = { $gte: start, $lte: end };
-  } else if (filters.dateFrom || filters.dateTo) {
-    query.uploadedAt = {};
-    if (filters.dateFrom) {
-      (query.uploadedAt as Record<string, Date>).$gte = filters.dateFrom;
-    }
-    if (filters.dateTo) {
-      (query.uploadedAt as Record<string, Date>).$lte = filters.dateTo;
-    }
-  }
+  applyDocumentMetadataFilters(query, filters);
 
   if (filters.keyword) {
     query.$text = { $search: filters.keyword };
@@ -299,6 +446,14 @@ export async function getDocumentById(userId: string, documentId: string) {
 
   if (!document) {
     throw new AppError('Document not found', 404);
+  }
+
+  if (document.aiSummary) {
+    document.aiSummary = reconcileSummaryIdentifiers(
+      document.aiSummary,
+      document.extractedText || '',
+      document.extractedData as Record<string, unknown> | undefined
+    );
   }
 
   return document;
@@ -332,8 +487,19 @@ export async function summarizeDocument(userId: string, documentId: string) {
   }
 
   if (document.aiSummary) {
+    const reconciledSummary = reconcileSummaryIdentifiers(
+      document.aiSummary,
+      document.extractedText || '',
+      document.extractedData as Record<string, unknown> | undefined
+    );
+
+    if (reconciledSummary !== document.aiSummary) {
+      document.aiSummary = reconciledSummary;
+      await document.save();
+    }
+
     return {
-      summary: document.aiSummary,
+      summary: reconciledSummary,
       cached: true,
     };
   }
@@ -347,7 +513,11 @@ export async function summarizeDocument(userId: string, documentId: string) {
     throw new AppError('Document text is not available for summarization yet', 400);
   }
 
-  const summary = await generateDocumentSummary(document, extractedText);
+  const summary = await generateDocumentSummary(
+    document,
+    extractedText,
+    document.extractedData as Record<string, unknown> | undefined
+  );
 
   document.aiSummary = summary;
   await document.save();

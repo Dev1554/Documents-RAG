@@ -17,6 +17,10 @@ import {
   Shield,
   DollarSign,
   Calendar,
+  Download,
+  Archive,
+  Pin,
+  Trash2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api, Category, ChatHistoryItem, ChatResponse } from '../lib/api';
@@ -30,31 +34,43 @@ interface Message {
 
 interface ParsedMessage {
   mainContent: string;
-  citations: Array<{ source: string; page: string }>;
 }
 
 const parseMessageContent = (text: string): ParsedMessage => {
   const citationRegex = /Source:\s*\n*([^\n]+)\s*\n+\s*Page:\s*(\d+)/gi;
-  const citations: Array<{ source: string; page: string }> = [];
-  
-  let match;
-  citationRegex.lastIndex = 0;
-  while ((match = citationRegex.exec(text)) !== null) {
-    citations.push({
-      source: match[1].trim(),
-      page: match[2].trim()
-    });
-  }
-  
   let mainContent = text.replace(citationRegex, '').trim();
   const cleanupRegex = /Never trust AI answers without source references\.?/gi;
   mainContent = mainContent.replace(cleanupRegex, '').trim();
   
   return {
-    mainContent,
-    citations
+    mainContent
   };
 };
+
+function getUniqueSourceDocumentIds(sources: ChatResponse['sources'] = []) {
+  return Array.from(new Set(sources.map((source) => source.documentId)));
+}
+
+function historyItemToMessages(item: ChatHistoryItem): Message[] {
+  if (item.messages?.length) {
+    return item.messages.map((message, index) => ({
+      id: `${item._id}-${index}`,
+      role: message.role,
+      content: message.content,
+      sources: message.sources,
+    }));
+  }
+
+  return [
+    { id: `${item._id}-q`, role: 'user', content: item.question },
+    {
+      id: `${item._id}-a`,
+      role: 'assistant',
+      content: item.answer,
+      sources: item.sources,
+    },
+  ];
+}
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -69,29 +85,34 @@ export default function ChatPage() {
   // Sidebar states
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [historyItems, setHistoryItems] = useState<ChatHistoryItem[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeSourceIndex, setActiveSourceIndex] = useState<{ msgId: string; srcIdx: number } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const threadContainerRef = useRef<HTMLDivElement>(null);
 
+  const loadSidebarHistory = async () => {
+    const res = await api.getChatHistory();
+    setHistoryItems(res.data);
+  };
+
+  const startNewChat = () => {
+    setActiveChatId(null);
+    setMessages([]);
+    setInput('');
+    setActiveSourceIndex(null);
+  };
+
+  const openChat = (item: ChatHistoryItem) => {
+    setActiveChatId(item._id);
+    setMessages(historyItemToMessages(item));
+    setActiveSourceIndex(null);
+    setInput('');
+  };
+
   useEffect(() => {
     api.getCategories().then((res) => setCategories(res.data));
-    api.getChatHistory().then((res) => {
-      const rawHistory = res.data;
-      setHistoryItems(rawHistory);
-      
-      const historyMessages: Message[] = [];
-      [...rawHistory].reverse().forEach((item: ChatHistoryItem) => {
-        historyMessages.push({ id: `${item._id}-q`, role: 'user', content: item.question });
-        historyMessages.push({
-          id: `${item._id}-a`,
-          role: 'assistant',
-          content: item.answer,
-          sources: item.sources,
-        });
-      });
-      setMessages(historyMessages);
-    });
+    loadSidebarHistory();
   }, []);
 
   useEffect(() => {
@@ -101,35 +122,46 @@ export default function ChatPage() {
   const submitQuestion = async (question: string) => {
     if (!question.trim() || loading) return;
 
-    setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'user', content: question }]);
+    const currentChatId = activeChatId;
+    const pendingUserId = `pending-${Date.now()}`;
+    setActiveSourceIndex(null);
+    setMessages((prev) =>
+      currentChatId ? [...prev, { id: pendingUserId, role: 'user', content: question }] : [{ id: pendingUserId, role: 'user', content: question }]
+    );
     setLoading(true);
 
     try {
-      const payload: Record<string, string> = { question };
+      const payload: {
+        question: string;
+        chatId?: string;
+        category?: string;
+        dateFrom?: string;
+        dateTo?: string;
+      } = { question };
+      if (currentChatId) payload.chatId = currentChatId;
       if (category) payload.category = category;
       if (dateFrom) payload.dateFrom = dateFrom;
       if (dateTo) payload.dateTo = dateTo;
 
-      const res = await api.askQuestion(
-        payload as { question: string; category?: string; dateFrom?: string; dateTo?: string }
-      );
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: res.data.id,
-          role: 'assistant',
-          content: res.data.answer,
-          sources: res.data.sources,
-        },
-      ]);
-      
-      // Refresh history sidebar list
-      api.getChatHistory().then((hRes) => setHistoryItems(hRes.data));
+      const res = await api.askQuestion(payload);
+
+      const newChatItem: ChatHistoryItem = {
+        _id: res.data.id,
+        question: res.data.question,
+        answer: res.data.answer,
+        sources: res.data.sources,
+        messages: res.data.messages,
+        createdAt: res.data.createdAt,
+      };
+
+      setActiveChatId(res.data.id);
+      setMessages(historyItemToMessages(newChatItem));
+      await loadSidebarHistory();
     } catch (err) {
       setMessages((prev) => [
-        ...prev,
+        ...(currentChatId ? prev : [{ id: pendingUserId, role: 'user' as const, content: question }]),
         {
-          id: Date.now().toString(),
+          id: `error-${Date.now()}`,
           role: 'assistant',
           content: err instanceof Error ? err.message : 'Failed to get answer',
         },
@@ -152,25 +184,57 @@ export default function ChatPage() {
     await submitQuestion(queryText);
   };
 
+  const handleUpdateChatHistoryItem = async (
+    itemId: string,
+    updates: { isPinned?: boolean; isArchived?: boolean }
+  ) => {
+    const res = await api.updateChatHistoryItem(itemId, updates);
+    setHistoryItems((prev) =>
+      prev
+        .map((item) => (item._id === itemId ? res.data : item))
+        .sort((a, b) => {
+          const pinnedDelta = Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
+          if (pinnedDelta !== 0) return pinnedDelta;
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        })
+    );
+
+    if (updates.isArchived && activeChatId === itemId) {
+      startNewChat();
+    } else if (activeChatId === itemId) {
+      setMessages(historyItemToMessages(res.data));
+    }
+  };
+
+  const handleDeleteChatHistoryItem = async (itemId: string) => {
+    if (!window.confirm('Delete this chat from history?')) return;
+
+    await api.deleteChatHistoryItem(itemId);
+    setHistoryItems((prev) => prev.filter((item) => item._id !== itemId));
+    if (activeChatId === itemId) {
+      startNewChat();
+    }
+  };
+
   const suggestions = [
     {
-      title: 'NDA Search',
-      desc: 'Find the standard employee NDA document template',
-      query: 'Find employee NDA template',
-      icon: Shield,
-      color: 'text-emerald-500 bg-emerald-500/10 dark:border-emerald-500/20',
-    },
-    {
-      title: 'GST Details',
-      desc: 'Show registered GST certificate details',
-      query: 'Show GST registration details',
+      title: 'Signed NDAs',
+      desc: 'Find clients who have signed NDA documents',
+      query: 'Which clients have signed NDAs?',
       icon: FileText,
       color: 'text-cyan-500 bg-cyan-500/10 dark:border-cyan-500/20',
     },
     {
-      title: 'Invoice Value',
-      desc: 'Analyze and retrieve invoice transaction values',
-      query: 'What is the total invoice value?',
+      title: 'OpenAI Mentions',
+      desc: 'Find every document that mentions OpenAI',
+      query: 'Find every document mentioning OpenAI',
+      icon: Shield,
+      color: 'text-emerald-500 bg-emerald-500/10 dark:border-emerald-500/20',
+    },
+    {
+      title: 'Expiring Contracts',
+      desc: 'Find contracts expiring in the current year',
+      query: 'Show all contracts expiring this year',
       icon: DollarSign,
       color: 'text-amber-500 bg-amber-500/10 dark:border-amber-500/20',
     },
@@ -182,19 +246,6 @@ export default function ChatPage() {
       color: 'text-teal-500 bg-teal-500/10 dark:border-teal-500/20',
     },
   ];
-
-  // Helper to scroll to specific message in thread
-  const scrollToMessage = (msgId: string) => {
-    const element = document.getElementById(msgId);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Apply brief highlight effect
-      element.classList.add('bg-blue-500/5', 'dark:bg-blue-500/10');
-      setTimeout(() => {
-        element.classList.remove('bg-blue-500/5', 'dark:bg-blue-500/10');
-      }, 1500);
-    }
-  };
 
   // Plain-text parser for styled markdown outputs (paragraphs, bold, code blocks, lists)
   const parseMarkdown = (text: string) => {
@@ -241,6 +292,9 @@ export default function ChatPage() {
     });
   };
 
+  const recentHistoryItems = historyItems.filter((item) => !item.isArchived);
+  const archivedHistoryItems = historyItems.filter((item) => item.isArchived);
+
   return (
     <div className="flex h-screen relative -mx-4 -my-20 lg:-mx-8 lg:-my-8 overflow-hidden bg-slate-50 dark:bg-[#060a13]">
       
@@ -263,10 +317,7 @@ export default function ChatPage() {
             {/* Sidebar header */}
             <div className="p-4 flex items-center justify-between border-b border-slate-200/60 dark:border-white/5">
               <button
-                onClick={() => {
-                  setMessages([]);
-                  setInput('');
-                }}
+                onClick={startNewChat}
                 className="flex items-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 px-3.5 py-2 text-xs font-bold text-slate-800 dark:text-white transition-all active:scale-95"
               >
                 <Plus className="h-4 w-4 text-blue-600 dark:text-teal-400" />
@@ -287,23 +338,108 @@ export default function ChatPage() {
                   <History className="h-3.5 w-3.5" />
                   Recent Queries
                 </span>
-                {historyItems.length === 0 ? (
+                {recentHistoryItems.length === 0 ? (
                   <p className="px-3 py-4 text-xs text-slate-400 italic">No past queries indexed</p>
                 ) : (
                   <div className="pt-2 space-y-1">
-                    {historyItems.map((item) => (
-                      <button
+                    {recentHistoryItems.map((item) => (
+                      <div
                         key={item._id}
-                        onClick={() => scrollToMessage(`${item._id}-q`)}
-                        className="w-full text-left rounded-xl px-3 py-2.5 text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2 truncate"
+                        className={`group/history flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs transition-colors ${
+                          activeChatId === item._id
+                            ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300'
+                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900/60 hover:text-slate-900 dark:hover:text-white'
+                        }`}
                       >
-                        <MessageSquare className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                        <span className="truncate">{item.question}</span>
-                      </button>
+                        <button
+                          onClick={() => openChat(item)}
+                          className="min-w-0 flex flex-1 items-center gap-2 py-1 text-left"
+                        >
+                          {item.isPinned ? (
+                            <Pin className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          ) : (
+                            <MessageSquare className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                          )}
+                          <span className="truncate">{item.question}</span>
+                        </button>
+                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/history:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateChatHistoryItem(item._id, { isPinned: !item.isPinned })}
+                            className={`rounded-lg p-1 hover:bg-white dark:hover:bg-slate-800 ${item.isPinned ? 'text-amber-500' : 'text-slate-400'}`}
+                            title={item.isPinned ? 'Unpin chat' : 'Pin chat'}
+                          >
+                            <Pin className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateChatHistoryItem(item._id, { isArchived: true })}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-blue-600 dark:hover:bg-slate-800 dark:hover:text-blue-400"
+                            title="Archive chat"
+                          >
+                            <Archive className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteChatHistoryItem(item._id)}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
+                            title="Delete chat"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
               </div>
+
+              {archivedHistoryItems.length > 0 && (
+                <div className="space-y-1">
+                  <span className="px-3 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <Archive className="h-3.5 w-3.5" />
+                    Archived
+                  </span>
+                  <div className="pt-2 space-y-1">
+                    {archivedHistoryItems.map((item) => (
+                      <div
+                        key={item._id}
+                        className={`group/history flex items-center gap-1 rounded-xl px-2 py-1.5 text-xs transition-colors ${
+                          activeChatId === item._id
+                            ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300'
+                            : 'text-slate-500 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-900/60'
+                        }`}
+                      >
+                        <button
+                          onClick={() => openChat(item)}
+                          className="min-w-0 flex flex-1 items-center gap-2 py-1 text-left"
+                        >
+                          <Archive className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{item.question}</span>
+                        </button>
+                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/history:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateChatHistoryItem(item._id, { isArchived: false })}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-blue-600 dark:hover:bg-slate-800 dark:hover:text-blue-400"
+                            title="Restore chat"
+                          >
+                            <Archive className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteChatHistoryItem(item._id)}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
+                            title="Delete chat"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* User widget */}
@@ -351,10 +487,10 @@ export default function ChatPage() {
 
               <div className="space-y-3">
                 <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                  How can I assist you today?
+                  Global AI Search
                 </h1>
                 <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
-                  Query the document vault for certificates, NDAs, invoices, or metrics. I will perform semantic alignment and summarize findings.
+                  Ask questions across all documents. I retrieve relevant chunks from the vault and synthesize an answer with citations.
                 </p>
               </div>
 
@@ -439,53 +575,67 @@ export default function ChatPage() {
                           <div>
                             {(() => {
                               const parsed = parseMessageContent(msg.content);
+                              const uniqueSourceIds = getUniqueSourceDocumentIds(msg.sources);
                               return (
                                 <>
                                   {parseMarkdown(parsed.mainContent)}
                                   
-                                  {/* Premium Verified Citations Panel */}
-                                  {parsed.citations.length > 0 && (
+                                  {/* Verified citations come from structured RAG sources, not model text. */}
+                                  {msg.sources && msg.sources.length > 0 && (
                                     <div className="mt-4 p-4 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 dark:border-emerald-500/10 dark:bg-emerald-950/10 backdrop-blur-md space-y-3 max-w-xl">
-                                      <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
-                                        <Shield className="h-4 w-4 shrink-0 text-emerald-500 animate-pulse" />
-                                        <span>Verified Source Documents</span>
+                                      <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                                          <Shield className="h-4 w-4 shrink-0 text-emerald-500 animate-pulse" />
+                                          <span>Verified Source Documents</span>
+                                        </div>
+                                        {uniqueSourceIds.length > 1 && (
+                                          <a
+                                            href={api.getDocumentsBulkDownloadUrl(uniqueSourceIds)}
+                                            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-white/70 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-700 shadow-sm transition hover:bg-emerald-50 dark:bg-emerald-950/20 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+                                            download
+                                          >
+                                            <Download className="h-3.5 w-3.5" />
+                                            Download all
+                                          </a>
+                                        )}
                                       </div>
                                       <div className="space-y-2">
-                                        {parsed.citations.map((cit, cIdx) => {
-                                          const matchedSource = msg.sources?.find(
-                                            (s) => s.documentName.toLowerCase() === cit.source.toLowerCase()
-                                          );
-                                          return (
-                                            <div
-                                              key={cIdx}
-                                              className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 bg-white/70 dark:border-white/5 dark:bg-slate-900/40 hover:scale-[1.01] hover:bg-white dark:hover:bg-slate-900/80 transition-all duration-200 shadow-sm"
-                                            >
-                                              <div className="flex items-center gap-2.5 min-w-0">
-                                                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                                                  <FileText className="h-4 w-4" />
-                                                </div>
-                                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate pr-2">
-                                                  {cit.source}
-                                                </span>
+                                        {msg.sources.map((source, cIdx) => (
+                                          <div
+                                            key={`${source.documentId}-${source.pageNumber || 1}-${cIdx}`}
+                                            className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 bg-white/70 dark:border-white/5 dark:bg-slate-900/40 hover:scale-[1.01] hover:bg-white dark:hover:bg-slate-900/80 transition-all duration-200 shadow-sm"
+                                          >
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                                <FileText className="h-4 w-4" />
                                               </div>
-                                              
-                                              <div className="flex items-center gap-3 shrink-0">
-                                                <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-400 uppercase tracking-wide">
-                                                  Page {cit.page}
-                                                </span>
-                                                {matchedSource && (
-                                                  <Link
-                                                    to={`/documents/${matchedSource.documentId}`}
-                                                    className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-blue-600 dark:text-blue-400"
-                                                    title="Open document"
-                                                  >
-                                                    <ArrowUpRight className="h-4 w-4" />
-                                                  </Link>
-                                                )}
-                                              </div>
+                                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate pr-2">
+                                                {source.documentName}
+                                              </span>
                                             </div>
-                                          );
-                                        })}
+                                            
+                                            <div className="flex items-center gap-3 shrink-0">
+                                              <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-400 uppercase tracking-wide">
+                                                Page {source.pageNumber || 1}
+                                              </span>
+                                              <Link
+                                                to={`/documents/${source.documentId}`}
+                                                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-blue-600 dark:text-blue-400"
+                                                title="Open document"
+                                              >
+                                                <ArrowUpRight className="h-4 w-4" />
+                                              </Link>
+                                              <a
+                                                href={api.getDocumentDownloadUrl(source.documentId)}
+                                                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-600 dark:text-emerald-400"
+                                                title="Download document"
+                                                download
+                                              >
+                                                <Download className="h-4 w-4" />
+                                              </a>
+                                            </div>
+                                          </div>
+                                        ))}
                                       </div>
                                     </div>
                                   )}
@@ -543,13 +693,23 @@ export default function ChatPage() {
                                         <p className="text-slate-500 dark:text-slate-400 italic leading-relaxed">
                                           "{source.content}"
                                         </p>
-                                        <Link
-                                          to={`/documents/${source.documentId}`}
-                                          className="text-[10px] font-bold text-blue-600 hover:underline uppercase flex items-center gap-1 pt-1"
-                                        >
-                                          Open document
-                                          <ArrowUpRight className="h-3.5 w-3.5" />
-                                        </Link>
+                                        <div className="flex items-center gap-3 pt-1">
+                                          <Link
+                                            to={`/documents/${source.documentId}`}
+                                            className="text-[10px] font-bold text-blue-600 hover:underline uppercase flex items-center gap-1"
+                                          >
+                                            Open document
+                                            <ArrowUpRight className="h-3.5 w-3.5" />
+                                          </Link>
+                                          <a
+                                            href={api.getDocumentDownloadUrl(source.documentId)}
+                                            className="text-[10px] font-bold text-emerald-600 hover:underline uppercase flex items-center gap-1"
+                                            download
+                                          >
+                                            Download
+                                            <Download className="h-3.5 w-3.5" />
+                                          </a>
+                                        </div>
                                       </motion.div>
                                     )}
                                   </AnimatePresence>
@@ -658,7 +818,7 @@ export default function ChatPage() {
                       handleSubmit(e);
                     }
                   }}
-                  placeholder="Ask indexed documents a question..."
+                  placeholder="Search across all indexed documents..."
                   rows={1}
                   className="max-h-32 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-3 text-sm text-slate-950 dark:text-slate-200 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"
                   disabled={loading}

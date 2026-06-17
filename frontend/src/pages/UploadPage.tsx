@@ -2,7 +2,21 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileUp, Sparkles, FolderOpen, Tag, Check, Loader2, Cpu, Database, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api, Category } from '../lib/api';
+import { api, Category, FolderTreeNode } from '../lib/api';
+
+function flattenFolderTree(
+  nodes: FolderTreeNode[],
+  depth = 0
+): Array<FolderTreeNode & { indent: number }> {
+  const result: Array<FolderTreeNode & { indent: number }> = [];
+  for (const node of nodes) {
+    result.push({ ...node, indent: depth });
+    if (node.children.length > 0) {
+      result.push(...flattenFolderTree(node.children, depth + 1));
+    }
+  }
+  return result;
+}
 
 const cleanFileNameToTitle = (filename: string) => {
   const base = filename.substring(0, filename.lastIndexOf('.')) || filename;
@@ -17,6 +31,8 @@ const cleanFileNameToTitle = (filename: string) => {
 
 export default function UploadPage() {
   const [categories, setCategories] = useState<Category[]>([]);
+  const [folderOptions, setFolderOptions] = useState<Array<FolderTreeNode & { indent: number }>>([]);
+  const [folderId, setFolderId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
   const [documentType, setDocumentType] = useState('Other');
@@ -32,6 +48,11 @@ export default function UploadPage() {
     api.getCategories().then((res) => {
       setCategories(res.data);
       if (res.data.length > 0) setCategory(res.data[0].name);
+    });
+    api.getFolderTree().then((res) => {
+      const flat = flattenFolderTree(res.data);
+      setFolderOptions(flat);
+      if (flat.length > 0) setFolderId(flat[0]._id);
     });
   }, []);
 
@@ -69,7 +90,7 @@ export default function UploadPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await api.uploadDocument(file, category, tags, title, documentType);
+      const res = await api.uploadDocument(file, category, tags, title, documentType, folderId || undefined);
       // Wait slightly on final step for visualization satisfaction
       setTimeout(() => {
         navigate(`/documents/${res.data._id}`);
@@ -218,6 +239,29 @@ export default function UploadPage() {
                 </div>
               </div>
 
+              {/* Destination Folder */}
+              <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
+                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-blue-500" />
+                  Destination Folder
+                </h3>
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Folder Location</label>
+                  <select
+                    value={folderId}
+                    onChange={(e) => setFolderId(e.target.value)}
+                    className="input-field"
+                    required
+                  >
+                    {folderOptions.map((folder) => (
+                      <option key={folder._id} value={folder._id} className="dark:bg-slate-950">
+                        {'—'.repeat(folder.indent)} {folder.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               {/* Classification */}
               <div className="rounded-3xl border border-slate-200 bg-white/70 dark:border-white/5 dark:bg-slate-950/40 p-6 backdrop-blur-xl space-y-4">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
@@ -225,7 +269,7 @@ export default function UploadPage() {
                   Classification
                 </h3>
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Target Category</label>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Category</label>
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
